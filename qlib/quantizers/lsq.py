@@ -55,35 +55,62 @@ class LSQAutograd(torch.autograd.Function):
 	
 
 class QuantizerLSQ(nn.Module):
-	def __init__(self, group_size, bit_width):
+	def __init__(self, group_size, bit_width, use_offset=True, initializer=None):
 		super().__init__()
 		self.group_size = group_size
 		self.bit_width = bit_width
 		self.negative_clip = -2**(bit_width-1)
 		self.positive_clip = 2**(bit_width-1) - 1
 		self.step = nn.Parameter(torch.tensor(1.0), requires_grad=True)
-		self.offset = nn.Parameter(torch.tensor(0.0), requires_grad=True)
-
+		self.use_offset = use_offset
+		if self.use_offset:
+			self.offset = nn.Parameter(torch.tensor(0.0), requires_grad=True)
+		else:
+			self.offset = None
+		self.initializer = initializer
+		self._initialized = False
 
 	def regroup(self, x):
+		if self.group_size == 'tensor':
+			return x.flatten()
+	
+		if self.group_size == 'channel':
+			return x.flatten(start_dim=1)
+
 		return x.reshape(-1, self.group_size)
 	
-	
 	def _initialize(self, x):
+		self._initialized = True
 		x_grouped = self.regroup(x)
-		x_min = x.min(axis=1)[0].unsqueeze(-1)
-		x_max = x.max(axis=1)[0].unsqueeze(-1)
+		if self.initializer is not None:
+			self.initializer(x_grouped, self)
+		else:
+			x_min = x_grouped.min(axis=-1)[0].unsqueeze(-1)
+			x_max = x_grouped.max(axis=-1)[0].unsqueeze(-1)
+			self.step.data = (x_max - x_min) / (2**self.bit_width - 1)
 		
-		self.step.data = (x_max - x_min) / (2**self.bit_width - 1)
-		self.offset.data = -self.step / 2
-
+		if self.use_offset:
+			self.offset.data = torch.zeros_like(self.step)
 
 	def quantize(self, x):
-		x_q = x - self.offset
+		x_shape = x.shape
+		if not self._initialized:
+			self._initialize(x)
+
+		x_q = self.regroup(x)
+
+		if self.use_offset:
+			x_q = x_q + self.offset 
+
 		x_q = LSQAutograd.apply(
-			x, self.step, self.negative_clip, self.positive_clip
+			x_q, self.step, self.negative_clip, self.positive_clip
 			)[0]
-		return x_q + self.offset
+		
+		if self.use_offset:
+			x_q = x_q - self.offset
 	
+		return x_q.reshape(x_shape)
+	
+
 	def forward(self, x):
 		return self.quantize(x)

@@ -18,4 +18,4 @@ class QLinear(nn.Module):
 			w_q = self.weight_quantizer(w)
 		
 		bias = self.module.bias
-		return F.linear(x, w_q, self.bias)	
+		return F.linear(x, w_q, bias)	
