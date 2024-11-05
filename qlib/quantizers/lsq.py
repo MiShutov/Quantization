@@ -89,13 +89,12 @@ class QuantizerLSQ(nn.Module):
 			x_max = x_grouped.max(axis=-1)[0].unsqueeze(-1)
 			self.step.data = (x_max - x_min) / (2**self.bit_width - 1)
 		
-		if self.use_offset:
-			self.offset.data = torch.zeros_like(self.step)
 
 	def quantize(self, x):
 		x_shape = x.shape
 		if not self._initialized:
-			self._initialize(x)
+			with torch.no_grad():
+				self._initialize(x)
 
 		x_q = self.regroup(x)
 
