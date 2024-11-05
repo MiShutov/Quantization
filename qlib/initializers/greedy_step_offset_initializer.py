@@ -1,15 +1,5 @@
 import torch
 
-
-class MomentCriteria:
-	def __init__(self, p=2):
-		self.p = p
-	
-	def __call__(self, x, x_q):
-		errors = torch.pow(torch.abs(x - x_q), self.p)
-		return torch.sum(errors, axis=-1, keepdim=True)
-
-
 class GreedyInitializer:
 	def __init__(self, criteria, n_grid_steps, n_grid_zooms):
 		self.criteria = criteria
