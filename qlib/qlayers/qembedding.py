@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -11,4 +12,4 @@ class QEmbedding(nn.Module):
 	def forward(self, x):
 		w = self.module.weight
 		w_q = self.weight_quantizer(w)
-		return F.embedding(x, w_q)	
+		return F.embedding(x, w_q)

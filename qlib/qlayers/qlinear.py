@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -10,12 +11,14 @@ class QLinear(nn.Module):
 		
 	
 	def forward(self, x):
+		bias = self.module.bias
+
 		if self.input_quantizer:
 			x = self.input_quantizer(x)
 			
 		if self.weight_quantizer:
 			w = self.module.weight
 			w_q = self.weight_quantizer(w)
-		
-		bias = self.module.bias
-		return F.linear(x, w_q, bias)	
+			return F.linear(x, w_q, bias)	
+
+		return F.linear(x, w, bias)	
