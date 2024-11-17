@@ -86,7 +86,7 @@ class QuantizerLUT(nn.Module):
 				loss = loss_fn(x_, x_q)
 				loss.backward()
 				if self.initialization_params['grad_norm']:
-					torch.nn.utils.clip_grad_norm_(self.levels, max_norm=0.01)
+					torch.nn.utils.clip_grad_norm_(self.levels, max_norm=1.0)
 				optim.step()
 				scheduler.step()
 				optim.zero_grad()

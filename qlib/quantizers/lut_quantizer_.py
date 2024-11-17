@@ -6,15 +6,8 @@ from qlib.quantizers.lut_quantizer import QuantizerLUT
 
 
 class QuantizerLUT_reparametrized(QuantizerLUT):
-	def __init__(self,
-			     group_size, 
-				 bit_width, 
-				 initialization_params,
-				 with_additions=False):
-		super().__init__(group_size, 
-						 bit_width, 
-						 initialization_params,
-						 with_additions)
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
 
 
 	def quantize(self, x):
