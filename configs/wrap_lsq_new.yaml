@@ -1,0 +1,72 @@
+layer_initializer: &layer_initializer !GreedyInitializer
+  criteria: !MomentCriteria
+    p: 4
+    sum_along_axis: -1
+  n_grid_steps: 5
+  n_grid_zooms: 2
+
+
+layer_quantizer: &layer_quantizer !QuantizerLSQ
+  group_size: 64
+  bit_width: 3
+  use_offset: True
+  initializer: *layer_initializer
+  #initializer: !MinMaxInitializer
+
+
+lm_head_quantizer: &lm_head_quantizer !QuantizerLSQ
+  group_size: channel
+  bit_width: 8 
+  use_offset: False
+  initializer: !MinMaxInitializer
+
+
+embed_quantizer: &embed_quantizer !QuantizerLSQ
+  group_size: channel
+  bit_width: 8 
+  use_offset: False
+  initializer: !MinMaxInitializer
+
+
+wrapper: &wrapper !Wrapper_
+  wrap_rule: 
+    Linear: !QLinear
+      weight_quantizer: *layer_quantizer
+    Embedding: !QEmbedding
+      weight_quantizer: *embed_quantizer
+    exceptions:
+      lm_head: !QLinear
+        weight_quantizer: *lm_head_quantizer
+      
+      layers.1.self_attn.q_proj: !QLinear
+        weight_quantizer: *lm_head_quantizer
+      layers.1.self_attn.k_proj: !QLinear
+        weight_quantizer: *lm_head_quantizer
+      layers.1.self_attn.v_proj: !QLinear
+        weight_quantizer: *lm_head_quantizer
+      layers.1.self_attn.o_proj: !QLinear
+        weight_quantizer: *lm_head_quantizer
+      layers.1.mlp.gate_proj: !QLinear
+        weight_quantizer: *lm_head_quantizer
+      layers.1.mlp.up_proj: !QLinear
+        weight_quantizer: *lm_head_quantizer
+      layers.1.mlp.down_proj: !QLinear
+        weight_quantizer: *lm_head_quantizer
+
+      # model.layers.15.self_attn.q_proj: !QLinear
+      #   weight_quantizer: *lm_head_quantizer
+      # model.layers.15.self_attn.k_proj: !QLinear
+      #   weight_quantizer: *lm_head_quantizer
+      # layers.15.self_attn.v_proj: !QLinear
+      #   weight_quantizer: *lm_head_quantizer
+      # layers.15.self_attn.o_proj: !QLinear
+      #   weight_quantizer: *lm_head_quantizer
+      # layers.15.mlp.gate_proj: !QLinear
+      #   weight_quantizer: *lm_head_quantizer
+      # layers.15.mlp.up_proj: !QLinear
+      #   weight_quantizer: *lm_head_quantizer
+      # layers.15.mlp.down_proj: !QLinear
+      #   weight_quantizer: *lm_head_quantizer
+
+
+

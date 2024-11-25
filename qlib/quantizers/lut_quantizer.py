@@ -2,35 +2,32 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from qlib.quantizers.quantizer import Quantizer
 
 
-class QuantizerLUT(nn.Module):
+class QuantizerLUT(Quantizer):
 	def __init__(self,
 			     group_size, 
 				 bit_width, 
 				 initialization_params,
 				 with_additions=False):
-		super().__init__()
-		self.group_size = group_size
-		self.bit_width = bit_width
-		self.negative_clip = -2**(bit_width-1)
-		self.positive_clip = 2**(bit_width-1) - 1
-		
-		self.levels = nn.Parameter(torch.tensor(1.0), requires_grad=True)
-
+		super().__init__(group_size, bit_width)
 		self.initialization_params = initialization_params
+		self.with_additions = with_additions
+
+		self.levels = nn.Parameter(torch.tensor(1.0), requires_grad=True)
+		if self.with_additions:
+			self.weight_additions=nn.Parameter(torch.zeros(1), requires_grad=True)
+		
 		if self.initialization_params is None:
 			self.initialization_params = {
 				'optim' : 'Adam',
-				'lr' : 1e-2,
-				'steps' : 100,
+				'lr' : 3e-3,
+				'steps' : 250,
 				'loss_p' : 4
 			}
-		self._initialized = False
-		self.with_additions = with_additions
-		if self.with_additions:
-			self.weight_additions=nn.Parameter(torch.zeros(1), requires_grad=True)
 
+	
 	@property
 	@torch.no_grad()
 	def borders(self):
@@ -42,16 +39,6 @@ class QuantizerLUT(nn.Module):
 			return self.weight_additions
 		else:
 			return None
-
-
-	def regroup(self, x):
-		if self.group_size == 'tensor':
-			return x.flatten()
-	
-		if self.group_size == 'channel':
-			return x.flatten(start_dim=1)
-
-		return x.reshape(-1, self.group_size)
 	
 
 	def _initialize(self, x):
@@ -64,6 +51,7 @@ class QuantizerLUT(nn.Module):
 			x_grouped = self.regroup(x)
 			x_min = x_grouped.min(axis=-1)[0].unsqueeze(-1)
 			x_max = x_grouped.max(axis=-1)[0].unsqueeze(-1)
+			#indices = torch.linspace(0, 1, self.bit_width**2, device=x.device, dtype=torch.float).view(1, -1)
 			indices = torch.linspace(0, 1, self.bit_width**2, device=x.device).view(1, -1)
 			self.levels.data = x_min.view(-1, 1) + (x_max.view(-1, 1) - x_min.view(-1, 1)) * indices
 	
@@ -85,7 +73,7 @@ class QuantizerLUT(nn.Module):
 				x_q = self(x_)
 				loss = loss_fn(x_, x_q)
 				loss.backward()
-				if self.initialization_params['grad_norm']:
+				if self.initialization_params.get('grad_norm', False):
 					torch.nn.utils.clip_grad_norm_(self.levels, max_norm=1.0)
 				optim.step()
 				scheduler.step()
@@ -111,11 +99,12 @@ class QuantizerLUT(nn.Module):
 			)
 		#reshape back
 		x_q = x_q.reshape(x_shape)
-
 		return x_q - x.detach() + x
 	
 
 	def forward(self, x):
+		if not self._quantize:
+			return x
 		return self.quantize(x)
 
 

@@ -7,4 +7,5 @@ class MomentCriteria:
 	
 	def __call__(self, x, x_q):
 		errors = torch.pow(torch.abs(x - x_q), self.p)
-		return torch.sum(errors, axis=self.sum_along_axis, keepdim=True)
+		loss = torch.sum(errors, axis=self.sum_along_axis, keepdim=True)
+		return loss

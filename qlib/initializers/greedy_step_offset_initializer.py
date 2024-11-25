@@ -6,31 +6,26 @@ class GreedyInitializer:
 		self.n_grid_steps = n_grid_steps
 		self.n_grid_zooms = n_grid_zooms
 	
+	@torch.no_grad()
 	def __call__(self, x_grouped, quantizer):
-		x_min = x_grouped.min(axis=-1)[0].unsqueeze(-1)
-		x_max = x_grouped.max(axis=-1)[0].unsqueeze(-1)		
-		diaps = x_max - x_min
+		x_min = x_grouped.min(axis=-1)[0].unsqueeze(-1).float()
+		x_max = x_grouped.max(axis=-1)[0].unsqueeze(-1).float()		
+		diaps = (x_max - x_min)
 		
-		self.init_scale = 0.5 * diaps / (2**quantizer.bit_width - 1)
-		self.best_scale = self.init_scale
-		quantizer.step.data = self.init_scale
+		init_scale = 0.1 * diaps / (2**quantizer.bit_width - 1)
+		quantizer.step.data = init_scale
 
-		self.grid_step = 2 * self.init_scale / (self.n_grid_steps-1)
+		init_scale_grid_step = 9 * init_scale / (self.n_grid_steps-1)
 		
 		if quantizer.use_offset == False:
-			with torch.no_grad():
-				x_q = quantizer(x_grouped)
+			x_q = quantizer(x_grouped)
 			self.best_loss = self.criteria(x_grouped, x_q)
-			
-			# for _ in range(self.n_grid_zooms):
-			# 	self.run_grid_search(x_grouped, quantizer)
-			# quantizer.step.data = self.best_scale
 
 			iter_params = {
 				'scale' : {
-					'init' : self.init_scale,
-					'step' : self.grid_step,
-					'best' : self.best_scale,
+					'init' : init_scale,
+					'step' : init_scale_grid_step,
+					'best' : init_scale,
 					'module' : quantizer.step,
 				}
 			}
@@ -43,27 +38,26 @@ class GreedyInitializer:
 			quantizer.step.data = iter_params['scale']['best']
 
 		else:
-			self.init_offset = -self.init_scale.clone() #torch.zeros_like(self.init_scale)
-			self.best_offset = self.init_offset
-			quantizer.offset.data = self.init_offset
-			
-			with torch.no_grad():
-				x_q = quantizer(x_grouped)
+			init_offset = x_min
+			quantizer.offset.data = init_offset
+			init_offset_grid_step = diaps / (self.n_grid_steps-1)
+
+			x_q = quantizer(x_grouped)
 			self.best_loss = self.criteria(x_grouped, x_q)
 			
 			iter_params = {
+						'scale' : {
+							'init' : init_scale,
+							'step' : init_scale_grid_step,
+							'best' : init_scale,
+							'module' : quantizer.step,
+						},
 						'offset': {
-							'init' : self.init_offset,
-							'step' : self.grid_step.clone(),
-							'best' : self.best_offset,
+							'init' : init_offset,
+							'step' : init_offset_grid_step,
+							'best' : init_offset,
 							'module' : quantizer.offset,
 						},
-						'scale' : {
-							'init' : self.init_scale,
-							'step' : self.grid_step.clone(),
-							'best' : self.best_scale,
-							'module' : quantizer.step,
-						}
 					}
 
 			for _ in range(self.n_grid_zooms):
@@ -71,23 +65,10 @@ class GreedyInitializer:
 					x_grouped,
 					quantizer, 
 					iter_params)
-			
+
 			quantizer.step.data = iter_params['scale']['best'].clone()
 			quantizer.offset.data = iter_params['offset']['best'].clone()
 			
-	def run_grid_search(self, 
-						x_grouped, 
-						quantizer):
-		for i in range(self.n_grid_steps):
-			scale = self.init_scale + self.grid_step * i
-			quantizer.step.data = scale
-			loss = self.criteria(x_grouped, quantizer(x_grouped))
-			best_loss_mask_upd = loss<self.best_loss
-			self.best_scale = torch.where(best_loss_mask_upd, scale, self.best_scale)
-			self.best_loss = torch.where(best_loss_mask_upd, loss, self.best_loss)
-		
-		self.init_scale = self.best_scale - self.grid_step
-		self.grid_step = (2 * self.grid_step) / (self.n_grid_steps-1)
 		
 	def run_multy_dim_search(self, x_grouped, quantizer, iter_params):
 		dim = len(iter_params.keys())
@@ -105,9 +86,8 @@ class GreedyInitializer:
 			# calc loss
 			loss = self.criteria(x_grouped, quantizer(x_grouped))
 			best_loss_mask_upd = loss<self.best_loss
-			
 			self.best_loss = torch.where(best_loss_mask_upd, loss, self.best_loss)
-			
+
 			# reset best params
 			for param_idx, param_name in enumerate(iter_params.keys()):
 				param_dict = iter_params[param_name]

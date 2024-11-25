@@ -1,0 +1,41 @@
+initialization_params: &initialization_params
+  optim : Adam
+  lr : 3e-3
+  steps : 250
+  norm_grad : False
+  criteria : !MomentCriteria
+    p: 4 
+
+
+layer_quantizer: &layer_quantizer !QuantizerLUT
+  group_size: 64
+  bit_width: 3
+  with_additions: True
+  initialization_params: *initialization_params
+
+
+lm_head_quantizer: &lm_head_quantizer !QuantizerLSQ
+  group_size: channel
+  bit_width: 8 
+  use_offset: False
+  initializer: !MinMaxInitializer
+
+
+embed_quantizer: &embed_quantizer !QuantizerLSQ
+  group_size: channel
+  bit_width: 8 
+  use_offset: False
+  initializer: !MinMaxInitializer
+
+
+wrapper: &wrapper !Wrapper_
+  wrap_rule: 
+    Linear: !QLinear
+      weight_quantizer: *layer_quantizer
+    Embedding: !QEmbedding
+      weight_quantizer: *embed_quantizer
+    exceptions:
+      lm_head: !QLinear
+        weight_quantizer: *lm_head_quantizer
+
+

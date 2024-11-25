@@ -1,33 +1,21 @@
 import torch
 import torch.nn as nn
 from qlib.utils.ste import ste_round_pass
+from qlib.quantizers.quantizer import Quantizer
 
 
-class QuantizerLSQ(nn.Module):
-	def __init__(self, group_size, bit_width, use_offset=True, initializer=None):
-		super().__init__()
-		self.group_size = group_size
-		self.bit_width = bit_width
+class QuantizerLSQ(Quantizer):
+	def __init__(self, group_size, bit_width, initializer, use_offset=True):
+		super().__init__(group_size, bit_width)
 		self.negative_clip = -2**(bit_width-1)
 		self.positive_clip = 2**(bit_width-1) - 1
 		self.use_offset = use_offset
 		self.initializer = initializer
-		self._initialized = False
 		self.step = nn.Parameter(torch.ones(1, 1), requires_grad=True)
 		if self.use_offset:
 			self.offset = nn.Parameter(torch.zeros(1, 1), requires_grad=True)
 		else:
 			self.offset = None
-
-
-	def regroup(self, x):
-		if self.group_size == 'tensor':
-			return x.flatten()
-	
-		if self.group_size == 'channel':
-			return x.flatten(start_dim=1)
-
-		return x.reshape(-1, self.group_size)
 	
 	
 	def _initialize(self, x):
@@ -37,20 +25,9 @@ class QuantizerLSQ(nn.Module):
 		self.step.data = torch.ones(x_grouped.shape[0], 1).to(x.device)
 		if self.use_offset:
 			self.offset.data = torch.zeros(x_grouped.shape[0], 1).to(x.device)
-		else:
-			self.offset = None
-		
-		if self.initializer is not None:
-			self.initializer(x_grouped, self)
-		else:
-			with torch.no_grad():
-				x_min = x_grouped.float().min(axis=-1)[0].unsqueeze(-1)
-				x_max = x_grouped.float().max(axis=-1)[0].unsqueeze(-1)
-				step = (x_max - x_min) / (2**self.bit_width - 1)
-				self.step.copy_(step)
-				if self.use_offset:
-					self.offset.copy_(torch.zeros_like(self.step.data))
 
+		self.initializer(x_grouped, self)
+		
 
 	def lsq_forward(self, x):
 		x_scaled = x / self.step
@@ -80,5 +57,6 @@ class QuantizerLSQ(nn.Module):
 	
 
 	def forward(self, x):
-		x_q = self.quantize(x)
-		return x_q
+		if not self._quantize:
+			return x
+		return self.quantize(x)
