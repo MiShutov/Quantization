@@ -129,3 +129,4 @@ with torch.no_grad():
 		# 	model.lm_head, fp_activations, q_activations, collect_q_activations=False
 		# 	)
 
+print('Hello!')
