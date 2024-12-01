@@ -23,4 +23,8 @@ class Quantizer(nn.Module):
 
 		return x.reshape(-1, self.group_size)
 
+	def __repr__(self):
+		return f"{self.__class__.__name__}(group_size={self.group_size}, bit_width={self.bit_width})"
+
+
 		

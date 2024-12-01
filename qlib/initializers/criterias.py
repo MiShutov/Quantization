@@ -1,11 +1,11 @@
 import torch
 
 class MomentCriteria:
-	def __init__(self, p, sum_along_axis=None):
+	def __init__(self, p, along_axis=None):
 		self.p = p
-		self.sum_along_axis = sum_along_axis
+		self.along_axis = along_axis
 	
 	def __call__(self, x, x_q):
 		errors = torch.pow(torch.abs(x - x_q), self.p)
-		loss = torch.sum(errors, axis=self.sum_along_axis, keepdim=True)
+		loss = torch.mean(errors, axis=self.along_axis, keepdim=True)
 		return loss

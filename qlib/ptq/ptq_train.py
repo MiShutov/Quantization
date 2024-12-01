@@ -1,131 +1,128 @@
-@torch.no_grad()
-def run_block_ptq(block, fp_activations, q_activations=None, collect_q_activations=True):
-	if q_activations is None:
-		q_activations = fp_activations
-		print("set q_activations = fp_activations")
+import torch
+from qlib.ptq.ptq_utils import switch_quantizers, prepare_optimizers
+import psutil
+import gc
 
-	# collect fp_activations
-	switch_quantizers(block, 'fp')
-	new_fp_activations = []
-	for fp_batch in tqdm(fp_activations):
-		fp_batch = fp_batch.to(DEVICE)
-		fp_output = block(fp_batch)
-		new_fp_activations.append(fp_output.detach().cpu())
+class TrainerPTQ():
+    def __init__(
+            self, 
+            optimization_config,
+            prepare_layer_inputs_fn,
+            act_store_dtype=torch.float16,
+            device_map='cuda'):
+        self.prepare_layer_inputs_fn = prepare_layer_inputs_fn
+        self.act_store_dtype = act_store_dtype
+        self.device_map = device_map
+        self.optimization_config = optimization_config
 
-	# collect q_activations
-	switch_quantizers(block, 'quantize')
-	if collect_q_activations:
-		new_q_activations = []
-		for q_batch in tqdm(q_activations):
-			q_batch = q_batch.to(DEVICE)
-			q_output = block(q_batch)
-			new_q_activations.append(q_output.detach().cpu())
-	else:
-		new_q_activations = None
+    @torch.no_grad()
+    def collect_block_activations(self, block, activations, with_input_preparation):
+        for act_idx, batch in enumerate(activations):
+            batch = batch.to(self.device_map)
+            if with_input_preparation:
+                input = self.prepare_layer_inputs_fn(activations=batch)
+                block_activations = block(**input)[0]
+            else:
+                block_activations = block(batch)
+            activations[act_idx] = block_activations.detach().cpu().to(self.act_store_dtype)
+        torch.cuda.empty_cache()
+        gc.collect()
 
-	return new_fp_activations, new_q_activations
-
-
-def collect_optim_params(module):
-	optim_params = []
-	for param_name, param in module.named_parameters(recurse=True):
-		if "weight_quantizer" in param_name:
-			param.requires_grad = True
-			optim_params.append(param)
-		else:
-			param.requires_grad = False
-	return optim_params
-
-
-def finetune_block_ptq(
-		block, 
-		fp_activations, 
-		q_activations=None, 
-		train_block=False):
-	if q_activations is None:
-		q_activations = fp_activations
-		print("set q_activations = fp_activations")
-		
-	# collect fp activations
-	switch_quantizers(block, 'fp')
-	new_fp_activations = []
-	with torch.no_grad():
-		#for fp_batch in tqdm(fp_activations):
-		for fp_batch in tqdm(q_activations):
-			fp_batch = fp_batch.to(DEVICE)
-			fp_input = prepare_llama_layer_inputs(
-								activations=fp_batch,
-								config = model.config,
-								position_embeddings_func = model_decoder.rotary_emb
-					)
-			fp_output = block(**fp_input)[0]
-			new_fp_activations.append(fp_output.detach().cpu())
-
-	# collect q activations
-	switch_quantizers(block, 'quantize')
-	if train_block:
-		with torch.enable_grad():
-			loss_fn = qlib.MomentCriteria(p=2)
-			optim = Adam(collect_optim_params(block), lr=1e-4)
-
-			for step in tqdm(range(len(q_activations))):
-				fp_output = new_fp_activations[step].to(DEVICE)
-				q_batch = q_activations[step].to(DEVICE)
-				
-				q_input = prepare_llama_layer_inputs(
-									activations=q_batch,
-									config = model.config,
-									position_embeddings_func = model_decoder.rotary_emb
-						)
-				
-				q_output = block(**q_input)[0]
-				loss = loss_fn(q_output, fp_output)
-				loss.backward()
-				#print(loss.item())
-				optim.step()
-				optim.zero_grad()
-
-	new_q_activations = []
-	with torch.no_grad():
-		for q_batch in tqdm(q_activations):
-			q_batch = q_batch.to(DEVICE)
-			q_input = prepare_llama_layer_inputs(
-								activations=q_batch,
-								config = model.config,
-								position_embeddings_func = model_decoder.rotary_emb
-					)
-			q_output = block(**q_input)[0]
-			new_q_activations.append(q_output.detach().cpu())
+    @torch.no_grad()
+    def validate(self, block, activations):
+        switch_quantizers(block, 'q')
+        val_activations_fp = activations['val_fp']
+        val_activations_q = activations['val_q']
+        losses = []
+        for act_idx, q_batch in enumerate(val_activations_q):
+            q_batch = q_batch.to(self.device_map)
+            q_input = self.prepare_layer_inputs_fn(activations=q_batch)
+            q_act = block(**q_input)[0]
+            fp_act = val_activations_fp[act_idx].to(self.device_map)
+            losses.append(torch.mean((q_act-fp_act)**2))
+        return sum(losses)/len(losses)
 
 
-	return new_fp_activations, new_q_activations
+    def finetune_block_ptq(
+            self,
+            block,
+            activations,
+            collect_fp=True,
+            collect_q=True,
+            train_block=False,
+            with_input_preparation=False,
+            ):
+
+        block = block.to(self.device_map)
+
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print("before collect_fp", memory_info.rss / (1024 ** 3))
+
+        if collect_fp:
+            switch_quantizers(block, 'fp')
+            self.collect_block_activations(block, activations['train_fp'], with_input_preparation)
+            self.collect_block_activations(block, activations['val_fp'], with_input_preparation)
+            switch_quantizers(block, 'q')
+
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print("after collect_fp", memory_info.rss / (1024 ** 3))
 
 
+        if train_block:
+            val_loss = self.validate(block, activations)
+            print(f"Init val loss: {val_loss.item():.3e}")
 
-with torch.no_grad():
-	with torch.autocast(device_type="cuda"):
-		print("model_decoder.embed_tokens")
+            switch_quantizers(block, 'q')
+            with torch.enable_grad():
+                loss_fn = self.optimization_config['loss_fn']
+                n_epochs = self.optimization_config['n_epochs']
+                optimizers = prepare_optimizers(
+                    self.optimization_config['optimizers'], block
+                )
+                
+                for epoch in range(n_epochs):
+                    for act_idx, q_batch in enumerate(activations['train_q']):
+                        q_batch = q_batch.to(self.device_map)
+                        q_input = self.prepare_layer_inputs_fn(activations=q_batch)
+                        q_act = block(**q_input)[0]
+                        fp_act = activations['train_fp'][act_idx].to(self.device_map)
+                        
+                        loss = loss_fn(q_act, fp_act)
+                        loss.backward()
+                        for optimizer_name in optimizers:
+                            optim = optimizers[optimizer_name]['optimizer']
+                            scheduler = optimizers[optimizer_name]['scheduler']
+                            optim.step()
+                            if scheduler is not None:
+                                scheduler.step()
+                            optim.zero_grad()
+                        
+            val_loss = self.validate(block, activations)
+            print(f"Result val loss: {val_loss.item():.3e}")
+        
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print("after train_block", memory_info.rss / (1024 ** 3))
 
-		fp_activations, q_activations = run_block_ptq(
-			model_decoder.embed_tokens, fp_activations=train_ids
-			)
-		
-		print("model_decoder.layers")
+        if collect_q:
+            switch_quantizers(block, 'q')
+            self.collect_block_activations(block, activations['train_q'], with_input_preparation)
+            self.collect_block_activations(block, activations['val_q'], with_input_preparation)
 
-		for decoder_layer in model_decoder.layers:
-			fp_activations, q_activations = finetune_block_ptq(
-				decoder_layer, fp_activations, q_activations, train_block=True
-				)
-		
-		# print("model_decoder.norm")
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print("after collect_q", memory_info.rss / (1024 ** 3))
 
-		# fp_activations, q_activations = run_block(
-		# 	model_decoder.norm, fp_activations, q_activations, collect_q_activations=False
-		# 	)
+        block = block.cpu()
 
-		# print("model.lm_head")
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print("after block.cpu()", memory_info.rss / (1024 ** 3))
 
-		# fp_activations, q_activations = run_block(
-		# 	model.lm_head, fp_activations, q_activations, collect_q_activations=False
-		# 	)
+        torch.cuda.empty_cache()
+        gc.collect()
+        return activations
+
 

@@ -2,6 +2,17 @@ import torch
 from tqdm import tqdm
 
 
+def get_quantized_model(wrapped_model, fp_model):
+	for module_name, _ in tqdm(wrapped_model.named_modules()):
+		if "weight_quantizer" in module_name:
+			module_prefix = module_name.split('.weight_quantizer')[0]
+			fp_module = fp_model.get_submodule(module_prefix).cpu()
+			q_module = wrapped_model.get_submodule(module_prefix).cuda()
+			fp_module.weight.data = q_module.weight_quantizer(q_module.module.weight).cpu()
+			q_module = q_module.cpu()
+	return fp_model
+
+
 def eval(model, eval_seq, seq_length, batch_size=1, print_times=10, last_batch=True):
 	'''
 	model
