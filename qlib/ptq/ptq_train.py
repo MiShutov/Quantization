@@ -126,3 +126,4 @@ class TrainerPTQ():
         return activations
 
 
+print('Hello!')
