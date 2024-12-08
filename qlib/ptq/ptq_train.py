@@ -2,128 +2,169 @@ import torch
 from qlib.ptq.ptq_utils import switch_quantizers, prepare_optimizers
 import psutil
 import gc
+import ctypes
+import qlib
+
+@torch.no_grad()
+def reassing(block):
+    for _, module in block.named_modules():
+        if isinstance(module, qlib.QLinear) and hasattr(module, 'weight_quantizer'):
+            if isinstance(module.weight_quantizer, qlib.VectorQuantizer):
+                weight = module.module.weight
+                module.weight_quantizer.reassign(weight)
+
+def free_unused_memory():
+    torch.cuda.empty_cache()
+    gc.collect()
+    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+    libc.malloc_trim(ctypes.c_int(0))
+
+
+def print_mem(name='mem', verbose=True):
+    if verbose:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print(name, memory_info.rss / (1024 ** 3), 'Gb')
+
 
 class TrainerPTQ():
     def __init__(
-            self, 
-            optimization_config,
-            prepare_layer_inputs_fn,
-            act_store_dtype=torch.float16,
-            device_map='cuda'):
-        self.prepare_layer_inputs_fn = prepare_layer_inputs_fn
-        self.act_store_dtype = act_store_dtype
+        self, 
+        optimization_config,
+        position_embeddings,
+        store_dtype=torch.float16,
+        device_map='cuda',
+        verbose=False,
+        validation_settings={
+            'before_trainig' : False,
+            'intermediate' : 0,
+            }
+        ):
+        self.store_dtype = store_dtype
         self.device_map = device_map
         self.optimization_config = optimization_config
+        self.position_embeddings = position_embeddings
+        self.verbose = verbose
+        self.validation_settings = validation_settings
+
+
+    @torch.no_grad()
+    def prepare_input(self, hidden_states):
+        return {
+            'hidden_states' : hidden_states,
+            "position_embeddings" : self.position_embeddings,
+        }
+
 
     @torch.no_grad()
     def collect_block_activations(self, block, activations, with_input_preparation):
+        block.eval()
         for act_idx, batch in enumerate(activations):
             batch = batch.to(self.device_map)
             if with_input_preparation:
-                input = self.prepare_layer_inputs_fn(activations=batch)
+                input = self.prepare_input(batch)
                 block_activations = block(**input)[0]
             else:
                 block_activations = block(batch)
-            activations[act_idx] = block_activations.detach().cpu().to(self.act_store_dtype)
-        torch.cuda.empty_cache()
-        gc.collect()
+            activations[act_idx] = block_activations.detach().cpu().to(self.store_dtype)
+        free_unused_memory()
+
+
+    @torch.enable_grad()
+    def train_block(self, block, activation_storage):
+        block.train()
+
+        switch_quantizers(block, 'q')
+        loss_fn = self.optimization_config['loss_fn']
+        n_epochs = self.optimization_config['n_epochs']
+        optimizers = prepare_optimizers(
+            self.optimization_config['optimizers'], block
+        )
+        # init validations
+        if self.validation_settings.get('before_trainig', False):
+            val_loss = self.validate(block, activation_storage)
+            print(f"Init val loss: {val_loss.item():.3e}")
+
+        # setup intermediate validation
+        if self.validation_settings.get('intermediate', 0):
+            val_step = n_epochs * activation_storage.n_train_batches//(self.validation_settings['intermediate'])
+            val_step = max(1, val_step)
+
+        for epoch in range(n_epochs):
+            for act_idx, q_batch in enumerate(activation_storage.train_q):
+                q_batch = q_batch.to(self.device_map)
+                q_input = self.prepare_input(q_batch)
+                q_act = block(**q_input)[0]
+                fp_act = activation_storage.train_fp[act_idx].to(self.device_map)
+                
+                loss = loss_fn(q_act, fp_act)
+                loss.backward()
+                for optimizer_name in optimizers:
+                    optim = optimizers[optimizer_name]['optimizer']
+                    scheduler = optimizers[optimizer_name]['scheduler']
+                    optim.step()
+                    if scheduler is not None:
+                        scheduler.step()
+                    optim.zero_grad()
+
+                # intermediate validations
+                if self.validation_settings.get('intermediate', 0):
+                    step = epoch * activation_storage.n_train_batches + act_idx
+                    if (step) and ((step+1)%val_step==0):
+                        val_loss = self.validate(block, activation_storage)
+                        print(f"Step {step}: {val_loss.item():.3e}")
+
+        free_unused_memory()
+
 
     @torch.no_grad()
-    def validate(self, block, activations):
+    def validate(self, block, activation_storage):
         switch_quantizers(block, 'q')
-        val_activations_fp = activations['val_fp']
-        val_activations_q = activations['val_q']
         losses = []
-        for act_idx, q_batch in enumerate(val_activations_q):
+        for act_idx, q_batch in enumerate(activation_storage.val_q):
             q_batch = q_batch.to(self.device_map)
-            q_input = self.prepare_layer_inputs_fn(activations=q_batch)
+            q_input = self.prepare_input(q_batch)
             q_act = block(**q_input)[0]
-            fp_act = val_activations_fp[act_idx].to(self.device_map)
+            fp_act = activation_storage.val_fp[act_idx].to(self.device_map)
             losses.append(torch.mean((q_act-fp_act)**2))
+
+        free_unused_memory()
         return sum(losses)/len(losses)
 
 
     def finetune_block_ptq(
             self,
             block,
-            activations,
+            activation_storage,
             collect_fp=True,
             collect_q=True,
-            train_block=False,
+            train=False,
             with_input_preparation=False,
             ):
 
         block = block.to(self.device_map)
 
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        print("before collect_fp", memory_info.rss / (1024 ** 3))
-
         if collect_fp:
             switch_quantizers(block, 'fp')
-            self.collect_block_activations(block, activations['train_fp'], with_input_preparation)
-            self.collect_block_activations(block, activations['val_fp'], with_input_preparation)
+            self.collect_block_activations(block, activation_storage.train_fp, with_input_preparation)
+            self.collect_block_activations(block, activation_storage.val_fp, with_input_preparation)
             switch_quantizers(block, 'q')
+            
+            print_mem(name="after collect_fp", verbose=self.verbose)
 
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        print("after collect_fp", memory_info.rss / (1024 ** 3))
-
-
-        if train_block:
-            val_loss = self.validate(block, activations)
-            print(f"Init val loss: {val_loss.item():.3e}")
-
-            switch_quantizers(block, 'q')
-            with torch.enable_grad():
-                loss_fn = self.optimization_config['loss_fn']
-                n_epochs = self.optimization_config['n_epochs']
-                optimizers = prepare_optimizers(
-                    self.optimization_config['optimizers'], block
-                )
-                
-                for epoch in range(n_epochs):
-                    for act_idx, q_batch in enumerate(activations['train_q']):
-                        q_batch = q_batch.to(self.device_map)
-                        q_input = self.prepare_layer_inputs_fn(activations=q_batch)
-                        q_act = block(**q_input)[0]
-                        fp_act = activations['train_fp'][act_idx].to(self.device_map)
-                        
-                        loss = loss_fn(q_act, fp_act)
-                        loss.backward()
-                        for optimizer_name in optimizers:
-                            optim = optimizers[optimizer_name]['optimizer']
-                            scheduler = optimizers[optimizer_name]['scheduler']
-                            optim.step()
-                            if scheduler is not None:
-                                scheduler.step()
-                            optim.zero_grad()
-                        
-            val_loss = self.validate(block, activations)
-            print(f"Result val loss: {val_loss.item():.3e}")
-        
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        print("after train_block", memory_info.rss / (1024 ** 3))
+        if train:
+            self.train_block(block, activation_storage)
+            
+            print_mem(name="after train_block", verbose=self.verbose)
 
         if collect_q:
             switch_quantizers(block, 'q')
-            self.collect_block_activations(block, activations['train_q'], with_input_preparation)
-            self.collect_block_activations(block, activations['val_q'], with_input_preparation)
-
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        print("after collect_q", memory_info.rss / (1024 ** 3))
-
-        block = block.cpu()
-
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        print("after block.cpu()", memory_info.rss / (1024 ** 3))
-
-        torch.cuda.empty_cache()
-        gc.collect()
-        return activations
-
-
-print('Hello!')
+            self.collect_block_activations(block, activation_storage.train_q, with_input_preparation)
+            self.collect_block_activations(block, activation_storage.val_q, with_input_preparation)
+            
+            print_mem(name="after collect_q", verbose=self.verbose)
+        
+        block.cpu()
+        print_mem(name="after block.cpu()", verbose=self.verbose)
+        
+        free_unused_memory()

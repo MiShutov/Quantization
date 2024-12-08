@@ -9,6 +9,9 @@ class QEmbedding(QLayer):
 		super().__init__()
 		self.weight_quantizer = weight_quantizer
 		
+	def configure(self, module):
+		if self.weight_quantizer:
+			self.weight_quantizer.configure(module)
 	
 	def forward(self, x):
 		w = self.module.weight

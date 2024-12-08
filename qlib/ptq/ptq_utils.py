@@ -1,7 +1,7 @@
 import torch
 from qlib.quantizers.quantizer import Quantizer
 from qlib.utils.loading import get_data
-
+from qlib.ptq.activations import ActivationStorage
 
 def set_quantize(module, quantize):
     if isinstance(module, Quantizer):
@@ -53,39 +53,12 @@ def configure_train_data(train_data, seq_length, n_train_seq, n_val_seq, batch_s
     }
 
 
-@torch.no_grad()
-def prepare_llama_layer_inputs(activations, position_embeddings_func):
-    causal_mask=None
-    past_key_values=None
-    past_seen_tokens=0
-    output_attentions=False#config.output_attentions
-    use_cache=False
-    cache_position = torch.arange(
-                    past_seen_tokens, past_seen_tokens + activations.shape[1],
-                    device=activations.device
-                )
-    position_ids = cache_position.unsqueeze(0)
-    position_embeddings = position_embeddings_func(activations, position_ids)
-    return {
-        "hidden_states" : activations,
-        "attention_mask" : causal_mask,
-        "position_ids" : position_ids,
-        "past_key_value" : past_key_values,
-        "output_attentions" : output_attentions,
-        "use_cache" : use_cache,
-        "cache_position" : cache_position,
-        "position_embeddings": position_embeddings
-    }
-
-
 def configure_optimizer(config, module):
     trainable_params = []
     for param_name, param in module.named_parameters(recurse=True):
-        if (config['param_label'] in param_name):
-            param.requires_grad = True
+        if (config['param_label'] in param_name) and (param.requires_grad==True):
+            #param.requires_grad = True
             trainable_params.append(param)
-
-
 
     if trainable_params:
         optimizer_class = getattr(torch.optim, config['class'])
@@ -127,10 +100,9 @@ def prepare_trainig_dataset(dataset_config, tokenizer):
     train_batches = batches['train_batches']
     val_batches = batches['val_batches']
     
-    init_activations = {
-                    "train_fp" : train_batches,
-                    "train_q" : [batch.clone() for batch in train_batches],
-                    'val_fp' : val_batches,
-                    'val_q' :  [batch.clone() for batch in val_batches]
-                }
-    return init_activations
+    return ActivationStorage(
+        train_fp = train_batches,
+        train_q = [batch.clone() for batch in train_batches],
+        val_fp = val_batches,
+        val_q = [batch.clone() for batch in val_batches]
+    )

@@ -9,6 +9,11 @@ class QLinear(QLayer):
 		self.weight_quantizer = weight_quantizer
 		self.input_quantizer = input_quantizer
 	
+	def configure(self, module):
+		if self.input_quantizer:
+			self.input_quantizer.configure(module)
+		if self.weight_quantizer:
+			self.weight_quantizer.configure(module)
 	
 	def forward(self, x):
 		bias = self.module.bias

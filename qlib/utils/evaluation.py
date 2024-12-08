@@ -8,7 +8,7 @@ def get_quantized_model(wrapped_model, fp_model):
 			module_prefix = module_name.split('.weight_quantizer')[0]
 			fp_module = fp_model.get_submodule(module_prefix).cpu()
 			q_module = wrapped_model.get_submodule(module_prefix).cuda()
-			fp_module.weight.data = q_module.weight_quantizer(q_module.module.weight).cpu()
+			fp_module.weight.data = q_module.weight_quantizer(q_module.module.weight).detach().cpu()
 			q_module = q_module.cpu()
 	return fp_model
 

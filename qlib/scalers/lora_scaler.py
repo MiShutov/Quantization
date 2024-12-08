@@ -10,13 +10,13 @@ class LoraScaler(Scaler):
         self.n_blocks = n_blocks
         self.lora_row = nn.Parameter(torch.tensor(1.0), requires_grad=True)
         self.lora_col = nn.Parameter(torch.tensor(1.0), requires_grad=True)
-        self._initialized = False
+
     
     @torch.no_grad()
     def _initialize(self, x):
         self.lora_row.data = torch.ones(x.shape[0], self.rank).to(x.device) / (self.rank)**0.5
         self.lora_col.data = torch.ones(self.rank, self.n_blocks).to(x.device) / (self.rank)**0.5
-        self._initialized = True
+        self._initialized.data = torch.tensor(True)
 
     def scale(self, x):
         if not self._initialized:

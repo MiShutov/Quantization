@@ -42,7 +42,7 @@ class QuantizerLUT(Quantizer):
 	
 
 	def _initialize(self, x):
-		self._initialized = True
+		self._initialized.data = torch.tensor(True)
 
 		if self.with_additions:
 			self.weight_additions.data=torch.zeros(x.shape).to(x.device)

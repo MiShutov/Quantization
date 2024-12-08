@@ -5,21 +5,37 @@ from qlib.quantizers.quantizer import Quantizer
 
 
 class QuantizerLSQ(Quantizer):
-	def __init__(self, group_size, bit_width, initializer, use_offset=True):
+	def __init__(
+			self, 
+			group_size, 
+			bit_width, 
+			initializer, 
+			use_offset=True, 
+			with_additions=False
+			):
 		super().__init__(group_size, bit_width)
 		self.negative_clip = -2**(bit_width-1)
 		self.positive_clip = 2**(bit_width-1) - 1
 		self.use_offset = use_offset
+		self.with_additions = with_additions
 		self.initializer = initializer
-		self.step = nn.Parameter(torch.ones(1, 1), requires_grad=True)
+	
+
+	@torch.no_grad()
+	def configure(self, module):
+		module_weight_shape = self.regroup(module.weight).shape
+		self.step = nn.Parameter(torch.empty(module_weight_shape[0], 1), requires_grad=True)
 		if self.use_offset:
-			self.offset = nn.Parameter(torch.zeros(1, 1), requires_grad=True)
+			self.offset = nn.Parameter(torch.empty(module_weight_shape[0], 1), requires_grad=True)
 		else:
 			self.offset = None
+		if self.with_additions:
+			self.additions = nn.Parameter(torch.zeros(module.weight.shape), requires_grad=True)
 	
-	
+
 	def _initialize(self, x):
-		self._initialized = True
+		x_shape = x.shape
+		self._initialized.data = torch.tensor(True)
 		x_grouped = self.regroup(x)
 
 		self.step.data = torch.ones(x_grouped.shape[0], 1).to(x.device)
@@ -27,6 +43,7 @@ class QuantizerLSQ(Quantizer):
 			self.offset.data = torch.zeros(x_grouped.shape[0], 1).to(x.device)
 
 		self.initializer(x_grouped, self)
+		x = x_grouped.reshape(x_shape)
 		
 
 	def lsq_forward(self, x):
@@ -42,6 +59,9 @@ class QuantizerLSQ(Quantizer):
 		if not self._initialized:
 			with torch.no_grad():
 				self._initialize(x)
+
+		if self.with_additions:
+			x = x + self.additions.reshape(x_shape)
 
 		x_q = self.regroup(x)
 			

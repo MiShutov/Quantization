@@ -30,32 +30,32 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 
-from ...activations import ACT2FN
-from ...cache_utils import Cache, DynamicCache, StaticCache
-from ...generation import GenerationMixin
-from ...modeling_attn_mask_utils import AttentionMaskConverter
-from ...modeling_flash_attention_utils import FlashAttentionKwargs, _flash_attention_forward
-from ...modeling_outputs import (
-    BaseModelOutputWithPast,
-    CausalLMOutputWithPast,
-    QuestionAnsweringModelOutput,
-    SequenceClassifierOutputWithPast,
-    TokenClassifierOutput,
-)
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
-from ...modeling_utils import PreTrainedModel
-from ...processing_utils import Unpack
-from ...pytorch_utils import ALL_LAYERNORM_LAYERS
-from ...utils import (
-    LossKwargs,
-    add_code_sample_docstrings,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    is_flash_attn_greater_or_equal_2_10,
-    logging,
-    replace_return_docstrings,
-)
-from .configuration_llama import LlamaConfig
+#from ...activations import ACT2FN
+#from ...cache_utils import Cache, DynamicCache, StaticCache
+#from ...generation import GenerationMixin
+#from ...modeling_attn_mask_utils import AttentionMaskConverter
+#from ...modeling_flash_attention_utils import FlashAttentionKwargs, _flash_attention_forward
+# from ...modeling_outputs import (
+#     BaseModelOutputWithPast,
+#     CausalLMOutputWithPast,
+#     QuestionAnsweringModelOutput,
+#     SequenceClassifierOutputWithPast,
+#     TokenClassifierOutput,
+# )
+# from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS
+# from ...modeling_utils import PreTrainedModel
+# from ...processing_utils import Unpack
+# from ...pytorch_utils import ALL_LAYERNORM_LAYERS
+# from ...utils import (
+#     LossKwargs,
+#     add_code_sample_docstrings,
+#     add_start_docstrings,
+#     add_start_docstrings_to_model_forward,
+#     is_flash_attn_greater_or_equal_2_10,
+#     logging,
+#     replace_return_docstrings,
+# )
+# from .configuration_llama import LlamaConfig
 
 
 logger = logging.get_logger(__name__)
@@ -83,8 +83,6 @@ class LlamaRMSNorm(nn.Module):
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
-
-ALL_LAYERNORM_LAYERS.append(LlamaRMSNorm)
 
 
 class LlamaRotaryEmbedding(nn.Module):
@@ -172,31 +170,6 @@ class LlamaRotaryEmbedding(nn.Module):
         sin = sin * self.attention_scaling
 
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
-
-
-class LlamaLinearScalingRotaryEmbedding(LlamaRotaryEmbedding):
-    """LlamaRotaryEmbedding extended with linear scaling. Credits to the Reddit user /u/kaiokendev"""
-
-    def __init__(self, *args, **kwargs):
-        logger.warning_once(
-            "`LlamaLinearScalingRotaryEmbedding` is deprecated an will be removed in v4.46. Please use "
-            "`LlamaRotaryEmbedding`, which now also does linear scaling (simply pass the model config to __init__)."
-        )
-        kwargs["rope_type"] = "linear"
-        super().__init__(*args, **kwargs)
-
-
-class LlamaDynamicNTKScalingRotaryEmbedding(LlamaRotaryEmbedding):
-    """LlamaRotaryEmbedding extended with Dynamic NTK scaling. Credits to the Reddit users /u/bloc97 and /u/emozilla"""
-
-    def __init__(self, *args, **kwargs):
-        logger.warning_once(
-            "`LlamaDynamicNTKScalingRotaryEmbedding` is deprecated an will be removed in v4.46. Please use "
-            "`LlamaRotaryEmbedding`, which now also does dynamic ntk scaling (simply pass the model config to "
-            "__init__)."
-        )
-        kwargs["rope_type"] = "dynamic"
-        super().__init__(*args, **kwargs)
 
 
 def rotate_half(x):

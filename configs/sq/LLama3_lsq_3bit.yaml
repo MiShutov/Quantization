@@ -5,27 +5,29 @@ layer_initializer: &layer_initializer !GreedyInitializer
   n_grid_steps: 5
   n_grid_zooms: 2
 
-
-layer_quantizer: &layer_quantizer !QuantizerLSQ
+layer_quantizer_lsq: &layer_quantizer_lsq !QuantizerLSQ
   group_size: 64
   bit_width: 3
   use_offset: True
-  initializer: *layer_initializer
-
+  with_additions: True
+  initializer: *layer_initializer #!MinMaxInitializer
 
 layer_quantizer_high_bit: &layer_quantizer_high_bit !QuantizerLSQ
   group_size: 64
   bit_width: 4
   use_offset: True
+  with_additions: True
   initializer: *layer_initializer
 
+# no_quantize: &no_quantize !Quantizer
+#   group_size: tensor
+#   bit_width: 32
 
 lm_head_quantizer: &lm_head_quantizer !QuantizerLSQ
   group_size: channel
-  bit_width: 8 
+  bit_width: 8
   use_offset: False
   initializer: !MinMaxInitializer
-
 
 embed_quantizer: &embed_quantizer !QuantizerLSQ
   group_size: channel
@@ -37,7 +39,7 @@ embed_quantizer: &embed_quantizer !QuantizerLSQ
 wrapper: &wrapper !Wrapper
   wrap_rule: 
     Linear: !QLinear
-      weight_quantizer: *layer_quantizer
+      weight_quantizer: *layer_quantizer_lsq
     Embedding: !QEmbedding
       weight_quantizer: *embed_quantizer
   exceptions:
@@ -48,44 +50,57 @@ wrapper: &wrapper !Wrapper
       layers.1.: !QLinear
         weight_quantizer: *layer_quantizer_high_bit
 
-      # layers.15.: !QLinear
-      #   weight_quantizer: *layer_quantizer_high_bit
+      # layers.0.: !QLinear
+      #   weight_quantizer: *no_quantize
 
-      # self_attn.q_proj: !QLinear
+      # layers.1.: !QLinear
+      #   weight_quantizer: *no_quantize
+
+      # layers.15.: !QLinear
       #   weight_quantizer: *lm_head_quantizer
+
+      # self_attn: !QLinear
+      #   weight_quantizer: *layer_quantizer_lowbit
+      
+      # mlp: !QLinear
+      #   weight_quantizer: *layer_quantizer_lowbit
 
 
 training_params:
   dataset:
     dataset_name: slim_pajama
-    split: train[:1000]
+    split: train[:2500]
     seq_length: 2048
-    n_train_seq: 256 #512
-    n_val_seq: 32
+    n_train_seq: 512
+    n_val_seq: 64
     batch_size: 2
+    scheduler: &scheduler
+      class: CosineAnnealingLR
+      kwargs:
+        T_max: 512
 
   optimization:
     n_epochs: 2
-    loss_fn: !MomentCriteria
-      p: 2
+    loss_fn: !MSE #!MAE
+
     optimizers:
+      additions_optimizer:
+        param_label: additions
+        class: Adam
+        kwargs:
+          lr: 2e-6
+        scheduler: *scheduler
+
       step_optimizer:
         param_label: step
         class: Adam
         kwargs:
-          lr: 1e-4
-        scheduler:
-          class: CosineAnnealingLR
-          kwargs:
-            T_max: 1024
+          lr: 2e-5
+        scheduler: *scheduler
 
       offset_optimizer:
         param_label: offset
         class: Adam
         kwargs:
-          lr: 1e-4
-        scheduler:
-          class: CosineAnnealingLR
-          kwargs:
-            T_max: 1024
-
+          lr: 2e-5
+        scheduler: *scheduler

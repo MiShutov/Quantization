@@ -74,9 +74,10 @@ training_params:
     dataset_name: slim_pajama
     split: train[:2500]
     seq_length: 2048
-    n_train_seq: 1024 #256 #512
-    n_val_seq: 64
+    n_train_seq: 128 #512 #256 #512
+    n_val_seq: 32
     batch_size: 2
+    T_max: &T_max 1024
 
   optimization:
     n_epochs: 2
@@ -87,38 +88,38 @@ training_params:
         param_label: levels
         class: Adam
         kwargs:
-          lr: 1e-4
+          lr: 1e-4 #3e-5
         scheduler:
           class: CosineAnnealingLR
           kwargs:
-            T_max: 1024
+            T_max: *T_max
 
       additions_optimizer:
         param_label: weight_additions
         class: Adam
         kwargs:
-          lr: 1e-5
+          lr: 2e-5
         scheduler:
           class: CosineAnnealingLR
           kwargs:
-            T_max: 1024
+            T_max: *T_max
 
       step_optimizer:
         param_label: step
         class: Adam
         kwargs:
-          lr: 1e-4
+          lr: 3e-5 # 1e-5
         scheduler:
           class: CosineAnnealingLR
           kwargs:
-            T_max: 1024
+            T_max: *T_max
 
       offset_optimizer:
         param_label: offset
         class: Adam
         kwargs:
-          lr: 1e-4
+          lr: 3e-5 # 1e-5
         scheduler:
           class: CosineAnnealingLR
           kwargs:
-            T_max: 1024
+            T_max: *T_max
