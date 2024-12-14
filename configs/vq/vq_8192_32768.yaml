@@ -3,13 +3,13 @@ with_reassings: &with_reassings True
 with_additions: &with_additions True
 
 medium_quantizer: &medium_quantizer !VectorQuantizer
-  codebook_size: 4096
+  codebook_size: 8192
   group_size: *group_size
   with_additions: *with_additions
   with_reassings: *with_reassings
 
 large_quantizer: &large_quantizer !VectorQuantizer
-  codebook_size: 8192
+  codebook_size: 32768
   group_size: *group_size
   with_additions: *with_additions
   with_reassings: *with_reassings
@@ -49,32 +49,32 @@ training_params:
     dataset_name: slim_pajama
     split: train[:2500]
     seq_length: 2048
-    n_train_seq: 128 #512
+    n_train_seq: 128
     n_val_seq: 32 #64
     batch_size: 8 # 2 #16 #2
     scheduler: &scheduler
       class: CosineAnnealingLR
       kwargs:
-        T_max: 512
+        T_max: 256 #512
 
   optimization:
-    n_epochs: 2
+    n_epochs: 1
     loss_fn: !MSE #!MAE
 
     optimizers:
-      # codebook_optimizer:
-      #   param_label: codebook
-      #   class: Adam
-      #   kwargs:
-      #     lr: 1e-4
-      #   scheduler: *scheduler
-
-      additions_optimizer:
-        param_label: additions
+      codebook_optimizer:
+        param_label: codebook
         class: Adam
         kwargs:
-          lr: 2e-5 #2e-5
+          lr: 1e-4
         scheduler: *scheduler
+
+      # additions_optimizer:
+      #   param_label: additions
+      #   class: Adam
+      #   kwargs:
+      #     lr: 2e-6 #2e-5
+      #   scheduler: *scheduler
 
 
 

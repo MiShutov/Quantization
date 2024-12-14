@@ -14,6 +14,20 @@ large_quantizer: &large_quantizer !VectorQuantizer
   with_additions: *with_additions
   with_reassings: *with_reassings
 
+layer_initializer: &layer_initializer !GreedyInitializer
+  criteria: !MomentCriteria
+    p: 2
+    along_axis: -1
+  n_grid_steps: 5
+  n_grid_zooms: 2
+
+layer_quantizer_high_bit: &layer_quantizer_high_bit !QuantizerLSQ
+  group_size: 64
+  bit_width: 4
+  use_offset: True
+  with_additions: True
+  initializer: *layer_initializer
+
 lm_head_quantizer: &lm_head_quantizer !QuantizerLSQ
   group_size: channel
   bit_width: 8 
@@ -37,6 +51,9 @@ wrapper: &wrapper !Wrapper
       lm_head: !QLinear
         weight_quantizer: *lm_head_quantizer
 
+      layers.0.: !QLinear
+        weight_quantizer: *layer_quantizer_high_bit
+
       self_attn: !QLinear
         weight_quantizer: *medium_quantizer
 
@@ -44,30 +61,31 @@ wrapper: &wrapper !Wrapper
         weight_quantizer: *large_quantizer
 
 
+
 training_params:
   dataset:
     dataset_name: slim_pajama
     split: train[:2500]
     seq_length: 2048
-    n_train_seq: 128 #512
+    n_train_seq: 200 #800
     n_val_seq: 32 #64
-    batch_size: 8 # 2 #16 #2
+    batch_size: 8 #16 #2
     scheduler: &scheduler
       class: CosineAnnealingLR
       kwargs:
-        T_max: 512
+        T_max: 300 #512
 
   optimization:
     n_epochs: 2
     loss_fn: !MSE #!MAE
 
     optimizers:
-      # codebook_optimizer:
-      #   param_label: codebook
-      #   class: Adam
-      #   kwargs:
-      #     lr: 1e-4
-      #   scheduler: *scheduler
+      codebook_optimizer:
+        param_label: codebook
+        class: Adam
+        kwargs:
+          lr: 1e-4
+        scheduler: *scheduler
 
       additions_optimizer:
         param_label: additions

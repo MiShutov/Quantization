@@ -28,6 +28,24 @@ def switch_quantizers(model, mode):
 
 
 @torch.no_grad()
+def switch_reassings(model, mode):
+    '''
+    'on' : turn on quantizers
+    'off' : turn off quantizers
+    '''
+    if mode=='on':
+        reassine = True
+    elif mode=='off':
+        reassine = False
+    else:
+        raise RuntimeError(f"mode {mode} not in ('on'|'off')")
+        
+    for module_name, module in model.named_modules():
+        if isinstance(module, Quantizer) and hasattr(module, 'with_reassings'):
+            module.with_reassings = reassine
+
+
+@torch.no_grad()
 def configure_train_data(train_data, seq_length, n_train_seq, n_val_seq, batch_size):
     train_data_len = train_data.shape[1]
     tokens_per_batch = seq_length*batch_size

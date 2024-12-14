@@ -8,20 +8,20 @@ import faiss
 
 from qlib.quantizers.quantizer import Quantizer
 
-NITER = 5 #25
+NITER = 25
 
-class VectorQuantizer(Quantizer):
+class ResidualVectorQuantizer(Quantizer):
     def __init__(self,
-                 codebook_size, 
+                 codebook_sizes, 
                  group_size, 
                  scaler=None,
                  with_additions=False,
                  with_reassings=False):
         super().__init__(
             group_size=group_size,
-            bit_width=math.ceil(math.log2(codebook_size))
+            bit_width=math.ceil(math.log2(codebook_sizes[0]))
         )
-        self.codebook_size = codebook_size
+        self.codebook_sizes = codebook_sizes
         self.scaler = scaler
         self.with_additions = with_additions
         self.with_reassings = with_reassings
@@ -31,13 +31,14 @@ class VectorQuantizer(Quantizer):
     @torch.no_grad()
     def configure(self, module):
         module_weight_shape = self.regroup(module.weight).shape
-        self.codebook = nn.Embedding(num_embeddings=self.codebook_size,
-                                     embedding_dim=self.group_size)
-        index_dtype = torch.int32 if self.codebook_size > 2**15 else torch.int16
-        self.idxs = nn.Parameter(torch.empty(module_weight_shape[0], 1, dtype=index_dtype), requires_grad=False)
+        self.codebooks = [nn.Embedding(num_embeddings=codebook_size,
+                                     embedding_dim=self.group_size) for codebook_size in self.codebook_sizes]
+        index_dtype = torch.int16
+        self.idxs = [nn.Parameter(torch.empty(module_weight_shape[0], 1, dtype=index_dtype),
+                          requires_grad=False) for _ in self.codebook_sizes]
         if self.with_additions:
             self.additions = nn.Parameter(
-                torch.zeros(module.weight.shape, dtype=torch.float32), requires_grad=True
+                torch.zeros(module_weight_shape, dtype=torch.float32), requires_grad=True
             )
         if self.scaler is not None:
             self.scaler.configure(module.weight)

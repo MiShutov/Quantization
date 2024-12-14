@@ -1,17 +1,17 @@
 import torch
-from qlib.ptq.ptq_utils import switch_quantizers, prepare_optimizers
+from qlib.ptq.ptq_utils import switch_quantizers, switch_reassings, prepare_optimizers
 import psutil
 import gc
 import ctypes
 import qlib
 
-@torch.no_grad()
-def reassing(block):
-    for _, module in block.named_modules():
-        if isinstance(module, qlib.QLinear) and hasattr(module, 'weight_quantizer'):
-            if isinstance(module.weight_quantizer, qlib.VectorQuantizer):
-                weight = module.module.weight
-                module.weight_quantizer.reassign(weight)
+# @torch.no_grad()
+# def reassing(block):
+#     for _, module in block.named_modules():
+#         if isinstance(module, qlib.QLinear) and hasattr(module, 'weight_quantizer'):
+#             if isinstance(module.weight_quantizer, qlib.VectorQuantizer):
+#                 weight = module.module.weight
+#                 module.weight_quantizer.reassign(weight)
 
 def free_unused_memory():
     torch.cuda.empty_cache()
@@ -58,6 +58,7 @@ class TrainerPTQ():
 
     @torch.no_grad()
     def collect_block_activations(self, block, activations, with_input_preparation):
+        switch_reassings(block, 'off')
         block.eval()
         for act_idx, batch in enumerate(activations):
             batch = batch.to(self.device_map)
@@ -71,10 +72,13 @@ class TrainerPTQ():
 
 
     @torch.enable_grad()
-    def train_block(self, block, activation_storage):
+    def train_block(self, block, activation_storage, with_reassings=True):
         block.train()
 
         switch_quantizers(block, 'q')
+        if with_reassings:
+            switch_reassings(block, 'on')
+        
         loss_fn = self.optimization_config['loss_fn']
         n_epochs = self.optimization_config['n_epochs']
         optimizers = prepare_optimizers(
@@ -82,7 +86,10 @@ class TrainerPTQ():
         )
         # init validations
         if self.validation_settings.get('before_trainig', False):
+            switch_reassings(block, 'off')
             val_loss = self.validate(block, activation_storage)
+            if with_reassings:
+                switch_reassings(block, 'on')
             print(f"Init val loss: {val_loss.item():.3e}")
 
         # setup intermediate validation
@@ -111,10 +118,14 @@ class TrainerPTQ():
                 if self.validation_settings.get('intermediate', 0):
                     step = epoch * activation_storage.n_train_batches + act_idx
                     if (step) and ((step+1)%val_step==0):
+                        switch_reassings(block, 'off')
                         val_loss = self.validate(block, activation_storage)
+                        if with_reassings:
+                            switch_reassings(block, 'on')
                         print(f"Step {step}: {val_loss.item():.3e}")
 
         free_unused_memory()
+        switch_reassings(block, 'off')
 
 
     @torch.no_grad()
@@ -140,6 +151,7 @@ class TrainerPTQ():
             collect_q=True,
             train=False,
             with_input_preparation=False,
+            with_reassings=True,
             ):
 
         block = block.to(self.device_map)
@@ -153,7 +165,7 @@ class TrainerPTQ():
             print_mem(name="after collect_fp", verbose=self.verbose)
 
         if train:
-            self.train_block(block, activation_storage)
+            self.train_block(block, activation_storage, with_reassings=with_reassings)
             
             print_mem(name="after train_block", verbose=self.verbose)
 
