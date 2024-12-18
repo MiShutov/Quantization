@@ -2,12 +2,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from qlib.qlayers.qlayer import QLayer
+from qlib.quantizers.quantizer import Quantizer
+from typing import List, Optional
+
 
 class QLinear(QLayer):
-	def __init__(self, weight_quantizer=None, input_quantizer=None):
+	def __init__(
+		self, 
+		weight_quantizer: Optional[Quantizer]=None, 
+		input_quantizer: Optional[Quantizer]=None, 
+		#bias: Optional[nn.Parameter]=None
+		):
 		super().__init__()
 		self.weight_quantizer = weight_quantizer
 		self.input_quantizer = input_quantizer
+		#self.bias = bias
 	
 	def configure(self, module):
 		if self.input_quantizer:

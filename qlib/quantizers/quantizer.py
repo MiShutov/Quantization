@@ -5,7 +5,7 @@ import torch.nn as nn
 class Quantizer(nn.Module):
 	def __init__(self,
 			     group_size, 
-				 bit_width):
+				 bit_width=None):
 		super().__init__()
 		self.group_size = group_size
 		self.bit_width = bit_width
