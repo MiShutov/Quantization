@@ -124,12 +124,6 @@ class ResidualVectorQuantizer(Quantizer):
             x_q = self.scaler.unscale(x_q)
 
         return x_q - x.detach() + x # provides additions grad
-    
-    
-    def forward(self, x):
-        if not self._quantize:
-            return x
-        return self.quantize(x)
 
 
     @torch.no_grad()

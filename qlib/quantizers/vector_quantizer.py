@@ -8,7 +8,7 @@ import faiss
 
 from qlib.quantizers.quantizer import Quantizer
 
-NITER = 5 #25
+NITER = 125 #5
 
 class VectorQuantizer(Quantizer):
     def __init__(self,
@@ -58,6 +58,7 @@ class VectorQuantizer(Quantizer):
 
     @torch.no_grad()
     def _initialize(self, x) -> None:
+        print('quantizer initialization...')
         vectors = self.regroup(x.detach()).cpu()
         kmeans = faiss.Kmeans(
             d=self.group_size,
@@ -81,7 +82,6 @@ class VectorQuantizer(Quantizer):
     @torch.no_grad()
     def reassign(self, x):
         vectors = self.regroup(x)
-
         if self.faiss_index is None:
             self._set_faiss_index(self.codebook.weight.detach().cpu(), vectors.shape[0])
 
@@ -96,9 +96,7 @@ class VectorQuantizer(Quantizer):
             self.faiss_index = faiss.index_gpu_to_cpu(self.faiss_index)
         else:
             _, idxs = self.faiss_index.search(vectors.cpu(), 1)
-
         self.idxs.copy_(torch.tensor(idxs, dtype=self.idxs.dtype, device=self.idxs.device))
-
 
 
     def quantize(self, x):
@@ -123,12 +121,6 @@ class VectorQuantizer(Quantizer):
             x_q = self.scaler.unscale(x_q)
 
         return x_q - x.detach() + x # provides additions grad
-    
-    
-    def forward(self, x):
-        if not self._quantize:
-            return x
-        return self.quantize(x)
 
 
     @torch.no_grad()

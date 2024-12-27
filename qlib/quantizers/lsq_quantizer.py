@@ -74,9 +74,3 @@ class QuantizerLSQ(Quantizer):
 			x_q = x_q - self.offset
 	
 		return x_q.reshape(x_shape)
-	
-
-	def forward(self, x):
-		if not self._quantize:
-			return x
-		return self.quantize(x)

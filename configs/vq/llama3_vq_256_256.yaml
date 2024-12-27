@@ -1,15 +1,18 @@
+model_name: Llama-3.2-1B # 'AMD-Llama-135m' 'Llama-3.2-1B' 'TinyLlama_v1.1'
+path_to_checkpoint: /home/msst/repo/Quantization/weights/llama3_vq_256_256_init.pth
+
 group_size: &group_size 8
 with_reassings: &with_reassings True
 with_additions: &with_additions True
 
 medium_quantizer: &medium_quantizer !VectorQuantizer
-  codebook_size: 4096
+  codebook_size: 256
   group_size: *group_size
   with_additions: *with_additions
   with_reassings: *with_reassings
 
 large_quantizer: &large_quantizer !VectorQuantizer
-  codebook_size: 8192
+  codebook_size: 256
   group_size: *group_size
   with_additions: *with_additions
   with_reassings: *with_reassings
@@ -45,13 +48,17 @@ wrapper: &wrapper !Wrapper
 
 
 training_params:
+  logdir: /home/msst/repo/Quantization/logs/llama_vq_256_256_test
+  validation_settings:
+    val_before_trainig: True
+    n_intermediate_val: 7
   dataset:
     dataset_name: slim_pajama
     split: train[:2500]
     seq_length: 2048
-    n_train_seq: 128 #512
-    n_val_seq: 32 #64
-    batch_size: 8 # 2 #16 #2
+    n_train_seq: 800 #256
+    n_val_seq: 128 #64
+    batch_size: 8
     scheduler: &scheduler
       class: CosineAnnealingLR
       kwargs:
@@ -66,14 +73,14 @@ training_params:
       #   param_label: codebook
       #   class: Adam
       #   kwargs:
-      #     lr: 1e-4
+      #     lr: 1e-5 #1e-6
       #   scheduler: *scheduler
 
       additions_optimizer:
         param_label: additions
         class: Adam
         kwargs:
-          lr: 2e-5 #2e-5
+          lr: 1e-4 #2e-5
         scheduler: *scheduler
 
 

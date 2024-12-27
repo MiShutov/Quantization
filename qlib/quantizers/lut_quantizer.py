@@ -100,12 +100,6 @@ class QuantizerLUT(Quantizer):
 		#reshape back
 		x_q = x_q.reshape(x_shape)
 		return x_q - x.detach() + x
-	
-
-	def forward(self, x):
-		if not self._quantize:
-			return x
-		return self.quantize(x)
 
 
 

@@ -1,7 +1,13 @@
+import psutil
+import gc
+import ctypes
+
 import torch
 from qlib.quantizers.quantizer import Quantizer
 from qlib.utils.loading import get_data
 from qlib.ptq.activations import ActivationStorage
+
+
 
 def set_quantize(module, quantize):
     if isinstance(module, Quantizer):
@@ -19,8 +25,6 @@ def switch_quantizers(model, mode):
         quantize = False
     else:
         raise RuntimeError(f"mode {mode} not in ('q'|'fp')")
-        
-    #model.apply(lambda x: set_quantize(x, quantize))
 
     for module_name, module in model.named_modules():
         if isinstance(module, Quantizer):
@@ -93,6 +97,7 @@ def configure_optimizer(config, module):
     else:
         return None
 
+
 def prepare_optimizers(config, module):
     optimizers = {}
     for optimizer_name in config:
@@ -124,3 +129,17 @@ def prepare_trainig_dataset(dataset_config, tokenizer):
         val_fp = val_batches,
         val_q = [batch.clone() for batch in val_batches]
     )
+
+
+def free_unused_memory():
+    torch.cuda.empty_cache()
+    gc.collect()
+    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+    libc.malloc_trim(ctypes.c_int(0))
+
+
+def print_mem(name='mem', verbose=True):
+    if verbose:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print(name, memory_info.rss / (1024 ** 3), 'Gb')
