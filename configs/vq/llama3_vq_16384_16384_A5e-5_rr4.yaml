@@ -1,0 +1,100 @@
+logdir: /home/msst/repo/Quantization/logs/llama3_vq_16384_16384_A5e-5_rr4
+model_name: Llama-3.2-1B
+#path_to_checkpoint: /home/msst/repo/Quantization/logs/llama3_lsq_2_64_W1e-4_A2e-5/qmodel.pth
+
+scaler: &scaler !RowScaler
+    n_blocks: 1
+    trainable: False
+
+group_size: &group_size 8
+with_reassings: &with_reassings True
+with_additions: &with_additions True
+
+medium_quantizer: &medium_quantizer !VectorQuantizer
+  codebook_size: 16384
+  group_size: *group_size
+  scaler: *scaler
+  with_additions: *with_additions
+  with_reassings: *with_reassings
+
+large_quantizer: &large_quantizer !VectorQuantizer
+  codebook_size: 16384
+  group_size: *group_size
+  scaler: *scaler
+  with_additions: *with_additions
+  with_reassings: *with_reassings
+
+lm_head_quantizer: &lm_head_quantizer !QuantizerLSQ
+  group_size: channel
+  bit_width: 8 
+  use_offset: False
+  initializer: !MinMaxInitializer
+
+embed_quantizer: &embed_quantizer !QuantizerLSQ
+  group_size: channel
+  bit_width: 8 
+  use_offset: False
+  initializer: !MinMaxInitializer
+
+wrapper: &wrapper !Wrapper
+  wrap_rule: 
+    Linear: !QLinear
+      weight_quantizer: *large_quantizer
+    Embedding: !QEmbedding
+      weight_quantizer: *embed_quantizer
+  exceptions:
+    Linear:
+      lm_head: !QLinear
+        weight_quantizer: *lm_head_quantizer
+
+      self_attn: !QLinear
+        weight_quantizer: *medium_quantizer
+
+      mlp: !QLinear
+        weight_quantizer: *large_quantizer
+
+
+test_params:
+  test_data:
+    dataset_name: wiki
+    split: test
+    seq_length: 2048
+    batch_size: 1
+    random_seed: 'no_rand'
+
+training_params:
+  train_data:
+    dataset_name: slim_pajama
+    split: train[:2500]
+    seq_length: 2048
+    n_train_seq: 512 #800
+    n_val_seq: 32 #32 #128
+    batch_size: 4
+
+  validation_settings:
+    val_before_trainig: True
+    n_intermediate_val: 8
+
+  optimization_settings:
+    n_epochs: 2
+    loss_fn: !MSE
+
+    scheduler: &scheduler
+      class: CosineAnnealingLR
+      kwargs:
+        T_max: 256 #64
+
+    optimizers:
+      # codebook_optimizer:
+      #   param_label: codebook
+      #   class: Adam
+      #   kwargs:
+      #     lr: 2e-5 #1e-6
+      #   scheduler: *scheduler
+
+      additions_optimizer:
+        param_label: additions
+        class: Adam
+        kwargs:
+          lr: 5e-5 #2e-4
+        scheduler: *scheduler

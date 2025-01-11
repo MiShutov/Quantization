@@ -16,7 +16,6 @@ class RowScaler(Scaler):
         block_scales = blocks.std(dim=2, unbiased=False)
         self.scales = nn.Parameter(block_scales, requires_grad=self.trainable)
 
-
     def scale(self, x):
         rows, cols = x.shape
         shift = cols // self.n_blocks
@@ -24,7 +23,6 @@ class RowScaler(Scaler):
         blocks = x.view(rows, self.n_blocks, shift)
         x_scaled = blocks / self.scales.unsqueeze(-1)
         return x_scaled.view(x.shape)
-
 
     def unscale(self, x_scaled):
         rows, cols = x_scaled.shape

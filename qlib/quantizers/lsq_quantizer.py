@@ -30,7 +30,7 @@ class QuantizerLSQ(Quantizer):
 		else:
 			self.offset = None
 		if self.with_additions:
-			self.additions = nn.Parameter(torch.zeros(module.weight.shape), requires_grad=True)
+			self.additions = nn.Parameter(torch.zeros(module_weight_shape), requires_grad=True)
 	
 
 	def _initialize(self, x):
@@ -60,11 +60,11 @@ class QuantizerLSQ(Quantizer):
 			with torch.no_grad():
 				self._initialize(x)
 
-		if self.with_additions:
-			x = x + self.additions.reshape(x_shape)
-
 		x_q = self.regroup(x)
-			
+		
+		if self.with_additions:
+			x_q = x_q + self.additions
+
 		if self.use_offset:
 			x_q = x_q + self.offset 
 
@@ -72,5 +72,5 @@ class QuantizerLSQ(Quantizer):
 		
 		if self.use_offset:
 			x_q = x_q - self.offset
-	
+		
 		return x_q.reshape(x_shape)

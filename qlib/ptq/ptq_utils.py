@@ -3,15 +3,12 @@ import gc
 import ctypes
 
 import torch
+from copy import deepcopy
+
 from qlib.quantizers.quantizer import Quantizer
 from qlib.utils.loading import get_data
 from qlib.ptq.activations import ActivationStorage
 
-
-
-def set_quantize(module, quantize):
-    if isinstance(module, Quantizer):
-        module._quantize = quantize
 
 @torch.no_grad()
 def switch_quantizers(model, mode):
@@ -38,15 +35,18 @@ def switch_reassings(model, mode):
     'off' : turn off quantizers
     '''
     if mode=='on':
-        reassine = True
+        eval_mode = False
     elif mode=='off':
-        reassine = False
+        eval_mode = True
     else:
         raise RuntimeError(f"mode {mode} not in ('on'|'off')")
         
     for module_name, module in model.named_modules():
         if isinstance(module, Quantizer) and hasattr(module, 'with_reassings'):
-            module.with_reassings = reassine
+            module.eval_mode = eval_mode
+            if mode=='off':
+                module.faiss_index = None
+
 
 
 @torch.no_grad()
@@ -78,10 +78,10 @@ def configure_train_data(train_data, seq_length, n_train_seq, n_val_seq, batch_s
 def configure_optimizer(config, module):
     trainable_params = []
     for param_name, param in module.named_parameters(recurse=True):
-        if (config['param_label'] in param_name) and (param.requires_grad==True):
-            #param.requires_grad = True
+        if (config['param_label'] in param_name):
+            param.requires_grad = True
             trainable_params.append(param)
-
+            
     if trainable_params:
         optimizer_class = getattr(torch.optim, config['class'])
         optimizer = optimizer_class(params=trainable_params, **config['kwargs'])
@@ -103,8 +103,25 @@ def prepare_optimizers(config, module):
     for optimizer_name in config:
         configured_optimizer = configure_optimizer(config[optimizer_name], module)
         if configured_optimizer is not None:
-            optimizers.update({optimizer_name: configure_optimizer(config[optimizer_name], module)})
+            optimizers.update({optimizer_name: configured_optimizer})
     return optimizers
+
+
+def optimization_step(
+        optimizers, 
+        step=None, 
+        training_settings=None
+    ):
+    if 1:
+        for optimizer_name in optimizers:
+            optim = optimizers[optimizer_name]['optimizer']
+            scheduler = optimizers[optimizer_name]['scheduler']
+            optim.step()
+            if scheduler is not None:
+                scheduler.step()
+            optim.zero_grad()
+    if 0:
+        print("training_settings:", training_settings)
 
 
 def prepare_trainig_dataset(dataset_config, tokenizer):
@@ -129,13 +146,6 @@ def prepare_trainig_dataset(dataset_config, tokenizer):
         val_fp = val_batches,
         val_q = [batch.clone() for batch in val_batches]
     )
-
-
-def free_unused_memory():
-    torch.cuda.empty_cache()
-    gc.collect()
-    libc = ctypes.CDLL(ctypes.util.find_library("c"))
-    libc.malloc_trim(ctypes.c_int(0))
 
 
 def print_mem(name='mem', verbose=True):

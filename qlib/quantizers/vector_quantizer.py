@@ -8,7 +8,7 @@ import faiss
 
 from qlib.quantizers.quantizer import Quantizer
 
-NITER = 125 #5
+NITER = 1 #125 #5
 
 class VectorQuantizer(Quantizer):
     def __init__(self,
@@ -16,7 +16,9 @@ class VectorQuantizer(Quantizer):
                  group_size, 
                  scaler=None,
                  with_additions=False,
-                 with_reassings=False):
+                 with_reassings=False,
+                 faiss_settings={'nlist' : 512, 'nprobe' : 16}
+                 ):
         super().__init__(
             group_size=group_size,
             bit_width=math.ceil(math.log2(codebook_size))
@@ -26,7 +28,8 @@ class VectorQuantizer(Quantizer):
         self.with_additions = with_additions
         self.with_reassings = with_reassings
         self.faiss_index = None
-
+        self.eval_mode = False
+        self.faiss_settings = faiss_settings
 
     @torch.no_grad()
     def configure(self, module):
@@ -34,7 +37,7 @@ class VectorQuantizer(Quantizer):
         self.codebook = nn.Embedding(num_embeddings=self.codebook_size,
                                      embedding_dim=self.group_size)
         index_dtype = torch.int32 if self.codebook_size > 2**15 else torch.int16
-        self.idxs = nn.Parameter(torch.empty(module_weight_shape[0], 1, dtype=index_dtype), requires_grad=False)
+        self.idxs = nn.Parameter(torch.empty(module_weight_shape[0], dtype=index_dtype), requires_grad=False)
         if self.with_additions:
             self.additions = nn.Parameter(
                 torch.zeros(module.weight.shape, dtype=torch.float32), requires_grad=True
@@ -45,13 +48,21 @@ class VectorQuantizer(Quantizer):
     
     @torch.no_grad()
     def _set_faiss_index(self, centroids, n_vectors) -> None:
-        if (self.codebook_size) >= 2**13 and n_vectors>2**21:
-            nlist = int(self.codebook_size**0.5)
+        if 1:
+        #if (self.codebook_size) >= 2**13 and n_vectors >= 2**21:
+            #print('set faiss.IndexIVFFlat')
+            nlist = self.faiss_settings['nlist']
+            nprobe = self.faiss_settings['nprobe']
+            
             index_IVF = faiss.IndexIVFFlat(faiss.IndexFlatL2(self.group_size), self.group_size, nlist)
             index_IVF.train(centroids)
-            index_IVF.nprobe = 8
+            index_IVF.nprobe = nprobe
             self.faiss_index = index_IVF
+            ###
+            self.faiss_index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, self.faiss_index)
+            ###
         else:
+            #print('set faiss.IndexFlatL2')
             self.faiss_index = faiss.IndexFlatL2(self.group_size)
         self.faiss_index.reset()
         self.faiss_index.add(self.codebook.weight.detach().cpu())
@@ -86,16 +97,17 @@ class VectorQuantizer(Quantizer):
             self._set_faiss_index(self.codebook.weight.detach().cpu(), vectors.shape[0])
 
         if isinstance(self.faiss_index, faiss.IndexIVFFlat):
-            self.faiss_index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, self.faiss_index)
+            #self.faiss_index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, self.faiss_index)
             
             self.faiss_index.reset()
             self.faiss_index.add(self.codebook.weight.detach().cpu())
             self.faiss_index.train(self.codebook.weight.detach().cpu())
 
-            _, idxs = self.faiss_index.search(vectors.cpu(), 1)
-            self.faiss_index = faiss.index_gpu_to_cpu(self.faiss_index)
+            idxs = self.faiss_index.search(vectors.cpu(), 1)[1][:, 0]
+            #self.faiss_index = faiss.index_gpu_to_cpu(self.faiss_index)
         else:
-            _, idxs = self.faiss_index.search(vectors.cpu(), 1)
+            idxs = self.faiss_index.search(vectors.cpu(), 1)[1][:, 0]
+        
         self.idxs.copy_(torch.tensor(idxs, dtype=self.idxs.dtype, device=self.idxs.device))
 
 
@@ -111,7 +123,7 @@ class VectorQuantizer(Quantizer):
         if self.with_additions:
             x = x + self.additions.reshape(x.shape)
 
-        if self.with_reassings:
+        if self.with_reassings and not self.eval_mode:
             self.reassign(x)
 
         vectors = self.codebook(self.idxs.to(torch.int32))

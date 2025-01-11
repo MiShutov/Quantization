@@ -1,56 +1,80 @@
 import torch
 from tqdm import tqdm
+import json
+import math
+
+from qlib.utils.memmory import free_unused_memory
+from qlib.utils.loading import get_data, load_llama, QATDataset
+from qlib.ptq.ptq_utils import switch_quantizers, switch_reassings
 
 
+class Tester:
+    def __init__(
+            self, 
+            logdir,
+            model_name,
+            tokenizer,
+            test_config,
+            device_map
+        ):
+        self.logdir = logdir
+        self.model_name = model_name
+        self.tokenizer = tokenizer
+        self.test_config = test_config['test_data']
+        self.device_map = device_map
+
+    @torch.no_grad()
+    def run_test(self, model):
+        dataloader = QATDataset(
+            config=self.test_config,
+            tokenizer=self.tokenizer
+        ).get_dataloader()
+
+        switch_quantizers(model, 'q')
+        switch_reassings(model, 'off')
+        quantized_model = get_quantized_model(
+            fp_model=load_llama(model_name=self.model_name)[1],
+            wrapped_model=model
+        )
+        del model
+        free_unused_memory()
+
+        quantized_model = quantized_model.half().to(self.device_map)
+
+        ppl = evaluate(quantized_model, dataloader, print_times=25)
+        json.dump({'test' : ppl}, open(f'{self.logdir}/test.json', 'w'))
+
+@torch.no_grad()
 def get_quantized_model(wrapped_model, fp_model):
-	for module_name, _ in tqdm(wrapped_model.named_modules()):
-		if "weight_quantizer" in module_name:
-			module_prefix = module_name.split('.weight_quantizer')[0]
-			fp_module = fp_model.get_submodule(module_prefix).cpu()
-			q_module = wrapped_model.get_submodule(module_prefix).cuda()
-			fp_module.weight.data = q_module.weight_quantizer(q_module.module.weight).detach().cpu()
-			q_module = q_module.cpu()
-	return fp_model
+    for module_name, _ in tqdm(wrapped_model.named_modules()):
+        if "weight_quantizer" in module_name:
+            module_prefix = module_name.split('.weight_quantizer')[0]
+            fp_module = fp_model.get_submodule(module_prefix).cpu()
+            q_module = wrapped_model.get_submodule(module_prefix).cuda()
+            fp_module.weight.data = q_module.weight_quantizer(q_module.module.weight).detach().cpu()
+            q_module = q_module.cpu()
+    return fp_model
 
 
-def eval(model, eval_seq, seq_length, batch_size=1, print_times=10, last_batch=True):
-	'''
-	model
-	eval_seq
-	'''
-	model.eval()
-	if seq_length is not None:
-		stride = seq_length
-	else:
-		stride = model.config.max_position_embeddings
+@torch.no_grad()
+def evaluate(model, dataloader, print_times=10):
+    n_steps = len(dataloader)
+    model.eval()
+    
+    loss = 0
+    n_processed_samples = 0
+    for step, batch in enumerate(tqdm(dataloader)):
+        batch = batch.to(model.device)
+        n_samples = batch.shape[0]
+        outputs = model(batch, labels=batch)
+        neg_log_likelihood = outputs.loss.detach()
+        
+        loss *= n_processed_samples / (n_processed_samples + n_samples)
+        n_processed_samples = n_processed_samples + n_samples
+        loss += neg_log_likelihood * n_samples / n_processed_samples
 
+        if step!=0 and step%(n_steps//print_times)==0:
+            print(math.exp(loss.item()))
 
-	input_len = torch.prod(torch.tensor(eval_seq.shape))
-	losses = []
-
-	max_idx = input_len//(stride * batch_size)
-	for step in tqdm(range(max_idx+1)):
-		
-		begin_loc = batch_size * stride * step
-		if step==max_idx:
-			batch = eval_seq[:, begin_loc:]
-			if not last_batch:
-				continue
-		else:		
-			batch = eval_seq[:, begin_loc:begin_loc+batch_size*stride]
-			batch = batch.reshape(-1, stride)
-
-		batch = batch.to(model.device)
-
-		with torch.no_grad():
-			with torch.autocast(device_type="cuda"):
-				outputs = model(batch, labels=batch)
-				neg_log_likelihood = outputs.loss.detach()
-		
-		losses.append(neg_log_likelihood)
-		if step!=0 and step%(max_idx//print_times)==0:
-			print(torch.exp(torch.stack(losses).mean()).item())
-
-		
-	ppl = torch.exp(torch.stack(losses).mean())
-	return ppl.item()
+    ppl = math.exp(loss.item())
+    return ppl

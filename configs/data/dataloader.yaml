@@ -1,0 +1,5 @@
+dataset_name: slim_pajama
+split: train[:2500] #train[:2500]
+seq_length: 2048
+batch_size: 1
+random_seed: 0
