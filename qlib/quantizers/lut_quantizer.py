@@ -63,7 +63,7 @@ class QuantizerLUT(Quantizer):
 		elif self.initialization_params['optim']=='SGD':
 			optim = SGD([self.levels], lr=lr)
 		else:
-			raise RuntimeError(f'QuantizerLUT::_initialize: Can\'t use {self.initialization_params['optim']} optimizer')
+			raise RuntimeError(f"QuantizerLUT::_initialize: Can\'t use {self.initialization_params['optim']} optimizer")
 		scheduler = CosineAnnealingLR(optim, T_max=optim_steps//2)
 
 		with torch.enable_grad():

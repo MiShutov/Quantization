@@ -25,9 +25,9 @@ def parse_config(path_to_config, device):
     config['wrapper'].wrap_model(model)
 
     if config.get('path_to_checkpoint', False):
-        print(f'loading checkpoint {config['path_to_checkpoint']}')
+        print(f"loading checkpoint {config['path_to_checkpoint']}")
         model.load_state_dict(torch.load(config['path_to_checkpoint'], weights_only=True))
-        print(f'checkpoint loaded!')
+        print(f"checkpoint loaded!")
 
     #configure trainer
     trainer = TrainerPTQ(

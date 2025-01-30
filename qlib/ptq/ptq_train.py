@@ -92,7 +92,7 @@ class TrainerPTQ():
                 step = epoch * self.activation_storage.n_train_batches + act_idx
 
                 # apply reassign_ratio setting
-                if act_idx % reassign_ratio == 0:
+                if step % reassign_ratio == 0:
                     switch_reassings(block, 'on')
                 else:
                     switch_reassings(block, 'off')
@@ -176,7 +176,7 @@ class TrainerPTQ():
             self.collect_block_activations(block, self.activation_storage.train_q, with_input_preparation)
             self.collect_block_activations(block, self.activation_storage.val_q, with_input_preparation)
         
-        block.cpu()
+        process_after_training(block)
         
         if save_block:
             print('block saving...')

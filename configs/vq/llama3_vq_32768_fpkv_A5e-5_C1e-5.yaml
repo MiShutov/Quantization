@@ -1,6 +1,5 @@
-logdir: /home/msst/repo/Quantization/logs/llama3_vq_32768_fpkv_A5e-5
+logdir: /home/msst/repo/Quantization/logs/llama3_vq_32768_fpkv_A5e-5_C1e-5
 model_name: Llama-3.2-1B
-#path_to_checkpoint: /home/msst/repo/Quantization/logs/llama3_lsq_2_64_W1e-4_A2e-5/qmodel.pth
 
 scaler: &scaler !RowScaler
     n_blocks: 1
@@ -76,12 +75,12 @@ training_params:
     dataset_name: slim_pajama
     split: train[:2500]
     seq_length: 2048
-    n_train_seq: 512 #800
+    n_train_seq: 512
     n_val_seq: 64 #128
     batch_size: 2
 
   training_settings:
-    reassign_ratio: 2
+    reassign_ratio: 3
 
   validation_settings:
     val_before_trainig: True
@@ -94,15 +93,15 @@ training_params:
     scheduler: &scheduler
       class: CosineAnnealingLR
       kwargs:
-        T_max: 512 #1024
+        T_max: 512
 
     optimizers:
-      # codebook_optimizer:
-      #   param_label: codebook
-      #   class: Adam
-      #   kwargs:
-      #     lr: 2e-5 #1e-6
-      #   scheduler: *scheduler
+      codebook_optimizer:
+        param_label: codebook
+        class: Adam
+        kwargs:
+          lr: 1e-5
+        scheduler: *scheduler
 
       additions_optimizer:
         param_label: additions

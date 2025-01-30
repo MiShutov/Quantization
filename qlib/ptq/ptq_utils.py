@@ -41,12 +41,17 @@ def switch_reassings(model, mode):
     else:
         raise RuntimeError(f"mode {mode} not in ('on'|'off')")
         
-    for module_name, module in model.named_modules():
+    for _, module in model.named_modules():
         if isinstance(module, Quantizer) and hasattr(module, 'with_reassings'):
             module.eval_mode = eval_mode
-            if mode=='off':
-                module.faiss_index = None
 
+
+@torch.no_grad()
+def process_after_training(model):
+    for _, module in model.named_modules():
+        if isinstance(module, Quantizer) and hasattr(module, 'faiss_index'):
+            module.faiss_index = None
+    model = model.cpu()
 
 
 @torch.no_grad()
@@ -121,7 +126,17 @@ def optimization_step(
                 scheduler.step()
             optim.zero_grad()
     if 0:
-        print("training_settings:", training_settings)
+        if step%2==1:
+            optimizer = optimizers['codebook_optimizer']
+        elif step%2==0:
+            optimizer = optimizers['additions_optimizer']
+
+        optimizer['optimizer'].step()
+        if optimizer['scheduler'] is not None:
+            optimizer['scheduler'].step()
+        optimizer['optimizer'].zero_grad()
+
+
 
 
 def prepare_trainig_dataset(dataset_config, tokenizer):
