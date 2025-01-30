@@ -5,9 +5,9 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset
 
-path_to_datasets = '/mnt/ssd_storage/local/llm/datasets'
-cache_dir="/mnt/ssd_storage/local/llm/datasets/huggingface_cache"
-path_to_pretrained_models = '/mnt/ssd_storage/local/llm//pretrained_models'
+path_to_datasets = '/mnt/ssd_storage/ml/llm/datasets'
+cache_dir = "/mnt/ssd_storage/ml/llm/datasets/huggingface_cache"
+path_to_pretrained_models = '/mnt/ssd_storage/ml/llm/pretrained_models'
 
 def load_llama(path_to_pretrained=None, model_name=None):
     if (path_to_pretrained is not None) and (model_name is not None):
