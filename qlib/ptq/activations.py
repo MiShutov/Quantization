@@ -23,11 +23,11 @@ class ActivationStorage:
 		self.train_seqlen = None
 		if self.train_fp is not None:
 			self.n_train_batches = len(self.train_fp)
-			self.train_seqlen = self.train_fp[0].shape[0]
+			self.train_seqlen = self.train_fp[0].shape[0] if self.n_train_batches>0 else None
 
 		self.n_val_batches = 0
 		self.val_seqlen = None
 		if self.val_fp is not None:
 			self.n_val_batches = len(self.val_fp)
-			self.val_seqlen = self.val_fp[0].shape[0]
-		print()
+			self.val_seqlen = self.val_fp[0].shape[0] if self.n_val_batches>0 else None
+		
