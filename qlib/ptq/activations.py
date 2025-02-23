@@ -2,7 +2,7 @@ import torch
 
 class ActivationStorage:
 	def __init__(
-			self, 
+			self,
 			train_fp = None,
 			train_q = None,
 			val_fp = None,
@@ -30,4 +30,16 @@ class ActivationStorage:
 		if self.val_fp is not None:
 			self.n_val_batches = len(self.val_fp)
 			self.val_seqlen = self.val_fp[0].shape[0] if self.n_val_batches>0 else None
+		
+
+class HomequantActivationStorage:
+	def __init__(
+			self,
+			mem_block_size = 8 * 2**30, # 8 Gb
+			disk_path: str = None
+		):
+		self.mem_block_size = mem_block_size
+		self.disk_path = disk_path
+
+
 		

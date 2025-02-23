@@ -1,5 +1,7 @@
 import torch
 import warnings
+from tqdm import tqdm
+
 
 class AutoKmeans:
     def __init__(
@@ -43,7 +45,7 @@ class AutoKmeans:
         # scale matrix
         if self.scale_type == 'OUTL2':
             scales = torch.linalg.norm(matrix, axis=1).unsqueeze(-1)
-        elif self.scale_type == 'STD':
+        elif self.scale_type == 'OUTSTD':
             scales = matrix.std(axis=1).unsqueeze(-1)
         elif self.scale_type is None:
             scales = None
@@ -131,7 +133,6 @@ class AutoKmeans:
             }
         return init_centroids
 
-
     @torch.compile
     @torch.no_grad()
     def _compute_assigments(
@@ -193,6 +194,7 @@ class AutoKmeans:
             weights: torch.tensor,
             batch_size=None,
             num_iters=None,
+            description=None,
         ):
         batch_size=batch_size if batch_size is not None else self.batch_size
         num_iters=num_iters if num_iters is not None else self.num_iters
@@ -211,7 +213,7 @@ class AutoKmeans:
         centroids = self._init_centroids(vectors=vectors, weights=weights)
     
         # main loop
-        for _ in range(num_iters):
+        for _ in tqdm(range(num_iters), desc=description, unit="iter", leave=True):
             # compute cluster assignments
             cluster_assignments = self._compute_assigments(
                 vectors=vectors, 

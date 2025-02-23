@@ -8,6 +8,7 @@ from copy import deepcopy
 from qlib.quantizers.quantizer import Quantizer
 from qlib.utils.loading import get_data
 from qlib.ptq.activations import ActivationStorage
+from torch.amp import autocast, GradScaler
 
 
 @torch.no_grad()
@@ -84,6 +85,7 @@ def configure_optimizer(config, module):
     trainable_params = []
     for param_name, param in module.named_parameters(recurse=True):
         if (config['param_label'] in param_name):
+            param.data = param.data.to(torch.float32)
             param.requires_grad = True
             trainable_params.append(param)
             
@@ -104,7 +106,7 @@ def configure_optimizer(config, module):
 
 
 def prepare_optimizers(config, module):
-    optimizers = {}
+    optimizers = {"grad_scaler": GradScaler('cuda')}
     for optimizer_name in config:
         configured_optimizer = configure_optimizer(config[optimizer_name], module)
         if configured_optimizer is not None:
@@ -117,24 +119,33 @@ def optimization_step(
         step=None, 
         training_settings=None
     ):
-    if 1:
-        for optimizer_name in optimizers:
-            optim = optimizers[optimizer_name]['optimizer']
-            scheduler = optimizers[optimizer_name]['scheduler']
-            optim.step()
-            if scheduler is not None:
-                scheduler.step()
-            optim.zero_grad()
-    if 0:
-        if step%2==1:
-            optimizer = optimizers['codebook_optimizer']
-        elif step%2==0:
-            optimizer = optimizers['additions_optimizer']
+    for optimizer_name in optimizers:
+        if optimizer_name == "grad_scaler":
+            continue
 
-        optimizer['optimizer'].step()
-        if optimizer['scheduler'] is not None:
-            optimizer['scheduler'].step()
-        optimizer['optimizer'].zero_grad()
+        optim = optimizers[optimizer_name]['optimizer']
+        scheduler = optimizers[optimizer_name]['scheduler']
+        
+        # optim.step()
+
+        grad_scaler = optimizers['grad_scaler']
+        grad_scaler.step(optim)
+        grad_scaler.update()
+        
+        if scheduler is not None:
+            scheduler.step()
+        optim.zero_grad()
+    
+    # if 0:
+    #     if step%2==1:
+    #         optimizer = optimizers['codebook_optimizer']
+    #     elif step%2==0:
+    #         optimizer = optimizers['additions_optimizer']
+
+    #     optimizer['optimizer'].step()
+    #     if optimizer['scheduler'] is not None:
+    #         optimizer['scheduler'].step()
+    #     optimizer['optimizer'].zero_grad()
 
 
 

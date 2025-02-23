@@ -4,6 +4,8 @@ from qlib.quantizers import *
 from qlib.qlayers import *
 from qlib.scalers import *
 from qlib.utils import *
+from qlib.ptq import *
+from qlib.vector_quantization import reassign
 
 from nip import wrap_module
 import qlib

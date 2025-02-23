@@ -66,8 +66,7 @@ def evaluate(model, dataloader, print_times=10):
     for step, batch in enumerate(tqdm(dataloader)):
         batch = batch.to(model.device)
         n_samples = batch.shape[0]
-        outputs = model(batch, labels=batch)
-        neg_log_likelihood = outputs.loss.detach()
+        neg_log_likelihood = model(batch, labels=batch).loss.detach()
         
         loss *= n_processed_samples / (n_processed_samples + n_samples)
         n_processed_samples = n_processed_samples + n_samples

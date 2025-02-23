@@ -1,12 +1,12 @@
 import os
 import torch
-from qlib.vc.kmeans.auto_kmeans import AutoKmeans
+from qlib.vector_quantization.kmeans.auto_kmeans import AutoKmeans
 from tqdm import trange
 
 from dataclasses import dataclass, asdict
 from typing import Literal
 
-SAVING_TEMPLATE = 'cb{cb_size}_vecdim{vecdim}_weight{weighting}_scale{scale}_dist{dist}_blocksize{matrix_block_size}'
+SAVING_TEMPLATE = 'cb{cb_size}_vecdim{vecdim}_weight{weighting}_scale{scale}_dist{dist}_blocksize{matrix_block_size}_iters{num_iters}'
 
 @dataclass
 class KmeasJobParams:
@@ -48,7 +48,8 @@ def save_result(indices, codebook, scales, params):
             weighting=params.weighting_type,
             scale=params.scale_type,
             dist=params.distance_type,
-            matrix_block_size=params.matrix_block_size
+            matrix_block_size=params.matrix_block_size,
+            num_iters=params.num_iters
         )
     )
 
