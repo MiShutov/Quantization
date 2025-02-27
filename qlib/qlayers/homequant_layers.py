@@ -10,9 +10,6 @@ class HQLayer(nn.Module):
     def __init__(self, path_to_vc_data):
         super().__init__()
         self.path_to_vc_data = path_to_vc_data
-        self.indices = None
-        self.codebook = None
-        self.scales = None
         self.weight_shape = None
         self.trainable = False
 
@@ -28,7 +25,7 @@ class HQLayer(nn.Module):
         if quant_data['scales'] is not None:
             self.scales = nn.Parameter(quant_data['scales'].to(module.weight.dtype)) # shape: [out_channels, 1]
         else: 
-            self.scales = None
+            self.register_buffer('scales', None)
         return deepcopy(self).to(module.weight.device)
 
     @property
@@ -57,12 +54,13 @@ def get_weight_change_absolute(latent_weight, weight):
 @torch.no_grad()
 def get_weight_change_relative(latent_weight, weight):
     abs_diff = torch.abs(latent_weight.detach() - weight.detach()).cpu()
-    norm = torch.abs(weight) + 1e-10
+    norm = torch.abs(weight.detach().cpu()) + 1e-10
     return torch.mean(abs_diff / norm).item()
 
 class HQLinear(HQLayer):
     def __init__(self, path_to_vc_data):
         super().__init__(path_to_vc_data)
+
 
     def _inference_forward(self, x):
         w = self.weight
@@ -72,32 +70,31 @@ class HQLinear(HQLayer):
     def _train_forward(self, x):
         assert hasattr(self, 'latent_weight')
 
-        self.metadata['weight_change_relative'].append(
-            get_weight_change_relative(self.latent_weight, self.weight)
-        )
-        self.metadata['weight_change_absolute'].append(
-            get_weight_change_absolute(self.latent_weight, self.weight)
-        )
-
-        if self.scales is not None:
-            vectors = (self.latent_weight / self.scales).reshape(-1, self.codebook.shape[1])
-        else:
-            vectors = self.latent_weight.reshape(-1, self.codebook.shape[1])
-            
-        indices = torch.tensor(
-            reassign(vectors.cpu(), self.codebook.cpu()),
-            dtype=self.indices.dtype, 
-            device=self.indices.device
-        )
-
-        self.metadata['new_indices_ratio'].append(
-            get_reassign_ratio(self.indices.data, indices)
-        )
-        self.metadata['new_indices_number'].append(
-            get_new_indices_number(self.indices.data, indices)
-        )
         with torch.no_grad():
-            self.indices.data.copy_(indices)
+            vecdim = self.codebook.shape[1]
+            n_vectors_to_reassign = int(torch.numel(self.latent_weight) // vecdim * self.reassine_params.get("reassine_frac", 1.0))
+            if n_vectors_to_reassign > 0:
+                vector_ids_to_reassign = torch.topk(
+                    torch.max((torch.abs(self.latent_weight - self.weight) / (torch.abs(self.weight) + 1e-10)).reshape(-1, vecdim), dim=1).values,
+                    #torch.linalg.norm((torch.abs(self.latent_weight - self.weight) / (torch.abs(self.weight) + 1e-10)).reshape(-1, vecdim), axis=1), 
+                    n_vectors_to_reassign
+                ).indices
+                
+                if self.scales is not None:
+                    vectors_to_reassign = (self.latent_weight / self.scales).reshape(-1, vecdim)[vector_ids_to_reassign]
+                else:
+                    vectors_to_reassign = self.latent_weight.reshape(-1, self.codebook.shape[1])[vector_ids_to_reassign]
+                    
+                new_indices = torch.tensor(
+                    reassign(vectors_to_reassign.cpu(), self.codebook.cpu(), self.reassine_params),
+                    dtype=self.indices.dtype, 
+                    device=self.indices.device
+                )
+
+                self.metadata['new_indices_ratio'].append(
+                    get_reassign_ratio(self.indices.data[vector_ids_to_reassign], new_indices)
+                )
+                self.indices.data[vector_ids_to_reassign] = new_indices
 
         return F.linear(
             x, 
@@ -110,7 +107,31 @@ class HQLinear(HQLayer):
         else:
             return self._inference_forward(x)
 
+    @torch.no_grad()
+    def _load_from_state_dict(
+            self,
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        ):
+            prepared_dict = {}
+            for k in state_dict:
+                prepared_dict.update({k.split(".")[-1]: state_dict[k]})
+            
+            self.indices.data.copy_(prepared_dict["indices"])
+            self.codebook.data.copy_(prepared_dict["codebook"])
 
+            if self.scales is None and prepared_dict["scales"] is not None:
+                self.scales = nn.Parameter(prepared_dict["scales"])
+            elif self.scales is not None and prepared_dict["scales"] is not None:
+                self.scales.data.copy_(prepared_dict["scales"])
+            elif self.scales is not None and prepared_dict["scales"] is None:
+                self.scales = None                
+                
 
 # class VQLinear(nn.Module):
 #     def __init__(self, weight_shape, indices, codebook, scales):

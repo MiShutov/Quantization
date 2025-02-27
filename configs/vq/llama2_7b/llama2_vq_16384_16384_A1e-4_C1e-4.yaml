@@ -1,4 +1,4 @@
-logdir: /home/msst/repo/Quantization/logs/llama2-7b/llama2_C1e-4_L1e-5
+logdir: /home/msst/repo/Quantization/logs/llama2-7b/llama2_C1e-4_L1e-4
 model_name: Llama2-7b-hf
 fp_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_fp
 q_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_q_l2_percoord
@@ -6,12 +6,20 @@ q_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_q_l2_p
 
 training_params:
   train_data:
+    # dataset_name: slim_pajama
+    # split: train[:1000]
+    # seq_length: 4096
+    # n_train_seq: 128 #64
+    # n_val_seq: 32 #16
+    # batch_size: 2
+
     dataset_name: slim_pajama
-    split: train[:1000]
+    split: train[:2000]
     seq_length: 4096
-    n_train_seq: 128 #64
-    n_val_seq: 32 #16
-    batch_size: 2
+    n_train_seq: 360 #64
+    n_val_seq: 30 #16
+    batch_size: 3
+
 
   # training_settings:
   #   reassign_ratio: 2
@@ -22,12 +30,12 @@ training_params:
 
   optimization_settings:
     n_epochs: 2
-    loss_fn: !MSE
+    loss_fn: !MAE
 
     scheduler: &scheduler
       class: CosineAnnealingLR
       kwargs:
-        T_max: 256 #128
+        T_max: 300
 
     optimizers:
       codebook_optimizer:

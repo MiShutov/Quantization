@@ -7,14 +7,19 @@ faiss_settings = {
     'nprobe' : 8
 }
 
+search_dist_map = {
+    'L2': faiss.METRIC_L2,
+    'L1': faiss.METRIC_L1,
+}
+
 @torch.no_grad()
-def reassign(vectors, codebook):
+def reassign(vectors, codebook, reassine_params):
     quantizer = faiss.IndexFlatL2(faiss_settings['vector_dim'])
     index_ivf = faiss.IndexIVFFlat(
         quantizer, 
         faiss_settings['vector_dim'], 
         faiss_settings['nlist'], 
-        faiss.METRIC_L2
+        #search_dist_map[reassine_params.get('nn_search_dist', 'L2')], 
     )
 
     gpu_index_ivf = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, index_ivf)

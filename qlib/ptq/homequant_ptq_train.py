@@ -57,7 +57,7 @@ class HomequantTrainerPTQ():
             self, 
             block,
         ):
-        prepare_block_for_training(block)
+        prepare_block_for_training(block, self.optimization_config.get('method_params'))
         block.train()
         
         loss_fn = self.optimization_config['loss_fn']
@@ -96,46 +96,55 @@ class HomequantTrainerPTQ():
                 grad_scaler.scale(loss).backward()
 
 
-                self.logger.log_scalar(
-                    dir='train', 
-                    scalar_name='new_indices_number (self_attn.q_proj)', 
-                    scalar=block.self_attn.q_proj.metadata['new_indices_number'][-1], 
-                    step=step
-                )
-                self.logger.log_scalar(
-                    dir='train', 
-                    scalar_name='weight_change_absolute (self_attn.q_proj)', 
-                    scalar=block.self_attn.q_proj.metadata['weight_change_absolute'][-1], 
-                    step=step
-                )
-                self.logger.log_scalar(
-                    dir='train', 
-                    scalar_name='weight_change_relative (self_attn.q_proj)', 
-                    scalar=block.self_attn.q_proj.metadata['weight_change_relative'][-1], 
-                    step=step
-                )
-
-
+                def check_if_metadata_exists(metadata, key):
+                    if len(metadata.get(key, [])) == 0:
+                        return 0
+                    else:
+                        metadata[key][-1]
 
                 self.logger.log_scalar(
                     dir='train', 
-                    scalar_name='new_indices_number (mlp.down_proj)', 
-                    scalar=block.mlp.down_proj.metadata['new_indices_number'][-1], 
+                    scalar_name='new_indices_ratio (self_attn.q_proj)', 
+                    scalar=check_if_metadata_exists(block.self_attn.q_proj.metadata, 'new_indices_ratio'),
                     step=step
                 )
                 self.logger.log_scalar(
                     dir='train', 
-                    scalar_name='weight_change_absolute (mlp.down_proj)', 
-                    scalar=block.mlp.down_proj.metadata['weight_change_absolute'][-1], 
+                    scalar_name='new_indices_ratio (self_attn.k_proj)', 
+                    scalar=check_if_metadata_exists(block.self_attn.k_proj.metadata, 'new_indices_ratio'),
                     step=step
                 )
                 self.logger.log_scalar(
                     dir='train', 
-                    scalar_name='weight_change_relative (mlp.down_proj)', 
-                    scalar=block.mlp.down_proj.metadata['weight_change_relative'][-1], 
+                    scalar_name='new_indices_ratio (self_attn.v_proj)', 
+                    scalar=check_if_metadata_exists(block.self_attn.v_proj.metadata, 'new_indices_ratio'),
                     step=step
                 )
-                
+                self.logger.log_scalar(
+                    dir='train', 
+                    scalar_name='new_indices_ratio (self_attn.o_proj)', 
+                    scalar=check_if_metadata_exists(block.self_attn.o_proj.metadata, 'new_indices_ratio'),
+                    step=step
+                )
+                self.logger.log_scalar(
+                    dir='train', 
+                    scalar_name='new_indices_ratio (mlp.down_proj)', 
+                    scalar=check_if_metadata_exists(block.mlp.down_proj.metadata, 'new_indices_ratio'),
+                    step=step
+                )
+                self.logger.log_scalar(
+                    dir='train', 
+                    scalar_name='new_indices_ratio (mlp.up_proj)', 
+                    scalar=check_if_metadata_exists(block.mlp.up_proj.metadata, 'new_indices_ratio'),
+                    step=step
+                )
+                self.logger.log_scalar(
+                    dir='train', 
+                    scalar_name='new_indices_ratio (mlp.gate_proj)', 
+                    scalar=check_if_metadata_exists(block.mlp.gate_proj.metadata, 'new_indices_ratio'),
+                    step=step
+                )
+        
 
                 #codebook = block.self_attn.q_proj.codebook
                 #print("codebook.grad:", codebook.grad)
