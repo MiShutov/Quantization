@@ -3,7 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from copy import deepcopy
+from qlib.ptq.homequant_ptq_utils import get_reassign_ratio
 from qlib.vector_quantization.nn_search.faiss_nn_search import reassign
+from qlib.utils.pack_effective import unpack_bool_tensor
 
 
 class HQLayer(nn.Module):
@@ -38,24 +40,6 @@ class HQLayer(nn.Module):
     def forward(self, x):
         pass
 
-@torch.no_grad()
-def get_new_indices_number(prev_indices, new_indices):
-    return (prev_indices != new_indices).sum().item()
-
-@torch.no_grad()
-def get_reassign_ratio(prev_indices, new_indices):
-    return ((prev_indices != new_indices).sum() / torch.numel(prev_indices)).item()
-
-@torch.no_grad()
-def get_weight_change_absolute(latent_weight, weight):
-    abs_diff = torch.abs(latent_weight.detach() - weight.detach()).cpu()
-    return torch.mean(abs_diff).item()
-
-@torch.no_grad()
-def get_weight_change_relative(latent_weight, weight):
-    abs_diff = torch.abs(latent_weight.detach() - weight.detach()).cpu()
-    norm = torch.abs(weight.detach().cpu()) + 1e-10
-    return torch.mean(abs_diff / norm).item()
 
 class HQLinear(HQLayer):
     def __init__(self, path_to_vc_data):
@@ -68,20 +52,19 @@ class HQLinear(HQLayer):
 
 
     def _train_forward(self, x):
-        assert hasattr(self, 'latent_weight')
-
-        with torch.no_grad():
-            vecdim = self.codebook.shape[1]
-            n_vectors_to_reassign = int(torch.numel(self.latent_weight) // vecdim * self.reassine_params.get("reassine_frac", 1.0))
-            if n_vectors_to_reassign > 0:
+        vector_dim = self.codebook.shape[1]
+        n_vectors_to_reassign = int(torch.numel(self.weight) // vector_dim * self.reassine_params.get("reassine_frac", 1.0))
+        if n_vectors_to_reassign > 0:
+            with torch.no_grad():
+                assert hasattr(self, 'latent_weight')
                 vector_ids_to_reassign = torch.topk(
-                    torch.max((torch.abs(self.latent_weight - self.weight) / (torch.abs(self.weight) + 1e-10)).reshape(-1, vecdim), dim=1).values,
-                    #torch.linalg.norm((torch.abs(self.latent_weight - self.weight) / (torch.abs(self.weight) + 1e-10)).reshape(-1, vecdim), axis=1), 
+                    torch.max((torch.abs(self.latent_weight - self.weight) / (torch.abs(self.weight) + 1e-10)).reshape(-1, vector_dim), dim=1).values,
+                    #torch.linalg.norm((torch.abs(self.latent_weight - self.weight) / (torch.abs(self.weight) + 1e-10)).reshape(-1, vector_dim), axis=1), 
                     n_vectors_to_reassign
                 ).indices
                 
                 if self.scales is not None:
-                    vectors_to_reassign = (self.latent_weight / self.scales).reshape(-1, vecdim)[vector_ids_to_reassign]
+                    vectors_to_reassign = (self.latent_weight / self.scales).reshape(-1, vector_dim)[vector_ids_to_reassign]
                 else:
                     vectors_to_reassign = self.latent_weight.reshape(-1, self.codebook.shape[1])[vector_ids_to_reassign]
                     
@@ -92,14 +75,15 @@ class HQLinear(HQLayer):
                 )
 
                 self.metadata['new_indices_ratio'].append(
-                    get_reassign_ratio(self.indices.data[vector_ids_to_reassign], new_indices)
+                    get_reassign_ratio(self.indices.data[vector_ids_to_reassign], new_indices) * self.reassine_params.get("reassine_frac", 1.0)
                 )
                 self.indices.data[vector_ids_to_reassign] = new_indices
 
-        return F.linear(
-            x, 
-            self.weight + self.latent_weight - self.latent_weight.detach()
-        )
+            return F.linear(
+                x, 
+                self.weight + self.latent_weight - self.latent_weight.detach()
+            )
+        return F.linear(x, self.weight)
 
     def forward(self, x):
         if self.trainable:
@@ -133,22 +117,89 @@ class HQLinear(HQLayer):
                 self.scales = None                
                 
 
-# class VQLinear(nn.Module):
-#     def __init__(self, weight_shape, indices, codebook, scales):
-#         super().__init__()
-#         self.weight_shape = weight_shape
-#         self.register_buffer('indices', indices.reshape(weight_shape[0], -1))  # [O, K]
-#         self.register_buffer('codebook', codebook)
-#         self.register_buffer('scales', scales.unsqueeze(-1))  # [O, 1]
-#         self.vector_size = codebook.size(-1)
+class SymHQLinear(nn.Module):
+    def __init__(self, path_to_vc_data):
+        super().__init__()
+        self.path_to_vc_data = path_to_vc_data
+        self.weight_shape = None
+        self.trainable = False
 
-#     def forward(self, x):
-#         B, S, H = x.shape
-#         O, _ = self.weight_shape
-#         K = H // self.vector_size
+    @torch.no_grad()
+    def wrap_module(self, module, module_name):
+        self.weight_shape = module.weight.shape
+
+        quant_data = torch.load(os.path.join(self.path_to_vc_data, f'{module_name}.pth'), weights_only=True)
+        self.register_buffer('indices', quant_data['indices'])
+        self.codebook = nn.Parameter(quant_data['codebook'].to(module.weight.dtype)) # shape: [codebook_size, vector_size]
+        self.register_buffer('signs', quant_data['signs']['packed'])
+
+        if quant_data['scales'] is not None:
+            self.scales = nn.Parameter(quant_data['scales'].to(module.weight.dtype)) # shape: [out_channels, 1]
+        else: 
+            self.register_buffer('scales', None)
         
-#         x_reshaped = x.view(B, S, K, self.vector_size)  # [B, S, K, V]
-#         codebook_vectors = self.codebook[self.indices.to(torch.int)]  # [O, K, V]
-#         scaled_codebook = codebook_vectors * self.scales  # [O, K, V]
+        return deepcopy(self).to(module.weight.device)
+    
+    @property
+    def weight(self):
+        if self.codebook.ndim == 2:
+            w = self.codebook[self.indices.to(torch.int)].reshape(self.weight_shape)
         
-#         return torch.einsum('bskv,okv->bso', x_reshaped, scaled_codebook)
+        elif self.codebook.ndim == 3:
+            n_blocks = self.indices.shape[0]
+            all_vectors = []
+            for i_block in range(n_blocks):
+                indices_part = self.indices[i_block]
+                codebook_part = self.codebook[i_block]
+                all_vectors.append(codebook_part[indices_part.to(torch.int)])
+            w = torch.stack(all_vectors).reshape(self.weight_shape)
+        
+        if self.scales is not None:
+            w *= self.scales
+        return w
+
+    def _inference_forward(self, x):
+        w = self.weight * (2 * unpack_bool_tensor(self.signs, self.weight_shape) - 1)
+        return F.linear(x, w)
+
+
+    def _train_forward(self, x):
+        assert hasattr(self, 'latent_weight')
+
+        vector_dim = self.codebook.shape[-1]
+        n_vectors_to_reassign = int(torch.numel(self.weight) // vector_dim * self.reassine_params.get("reassine_frac", 1.0))
+        if n_vectors_to_reassign > 0:
+            with torch.no_grad():
+                vector_ids_to_reassign = torch.topk(
+                    torch.max((torch.abs(self.latent_weight - self.weight) / (torch.abs(self.weight) + 1e-10)).reshape(-1, vector_dim), dim=1).values,
+                    #torch.linalg.norm((torch.abs(self.latent_weight - self.weight) / (torch.abs(self.weight) + 1e-10)).reshape(-1, vector_dim), axis=1), 
+                    n_vectors_to_reassign
+                ).indices
+                
+                if self.scales is not None:
+                    vectors_to_reassign = (self.latent_weight / self.scales).reshape(-1, vector_dim)[vector_ids_to_reassign]
+                else:
+                    vectors_to_reassign = self.latent_weight.reshape(-1, self.codebook.shape[1])[vector_ids_to_reassign]
+                    
+                new_indices = torch.tensor(
+                    reassign(vectors_to_reassign.cpu(), self.codebook.cpu(), self.reassine_params),
+                    dtype=self.indices.dtype, 
+                    device=self.indices.device
+                )
+
+                self.metadata['new_indices_ratio'].append(
+                    get_reassign_ratio(self.indices.data[vector_ids_to_reassign], new_indices) * self.reassine_params.get("reassine_frac", 1.0)
+                )
+                self.indices.data[vector_ids_to_reassign] = new_indices
+
+            return F.linear(
+                x, 
+                self.weight + self.latent_weight - self.latent_weight.detach()
+            )
+        return F.linear(x, self.weight)
+
+    def forward(self, x):
+        if self.trainable:
+            return self._train_forward(x)
+        else:
+            return self._inference_forward(x)

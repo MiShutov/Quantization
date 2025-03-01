@@ -16,6 +16,7 @@ class AutoKmeans:
             num_iters=None,
             batch_size=2**16,
             eps=1e-8,
+            use_absolute_coordinates=False,
             matrix_block_size=None,
         ):
         self.device = device
@@ -24,8 +25,9 @@ class AutoKmeans:
         self.weighting_type = weighting_type
         self.distance_type = distance_type
         self.init_type = init_type
-        # optional
+        # Optional
         self.matrix_block_size = matrix_block_size
+        self.use_absolute_coordinates = use_absolute_coordinates
         self.batch_size = batch_size
         self.num_centroids = num_centroids
         self.num_iters = num_iters
@@ -42,7 +44,7 @@ class AutoKmeans:
         matrix = matrix.to(self.device)
         hess = hess.to(self.device)
 
-        # scale matrix
+        # Scale matrix
         if self.scale_type == 'OUTL2':
             scales = torch.linalg.norm(matrix, axis=1).unsqueeze(-1)
         elif self.scale_type == 'OUTSTD':
@@ -57,19 +59,19 @@ class AutoKmeans:
             matrix = matrix / scales
             scales = scales.to('cpu')
 
-        # TODO: scale hess (if FISHER HESS)
+        # TODO: Scale hess (if FISHER HESS)
         # hess = hess * (scales**2)
 
-        # for numerical stability
+        # For numerical stability
         hess /= hess.mean()
 
-        # prepere matrix blocks if needed
+        # Prepere matrix blocks if needed
         if self.matrix_block_size is None:
             vectors = matrix.reshape(-1, self.vector_dim)
             weights = hess.reshape(-1, self.vector_dim)
         else:
-            impossible_to_divide_flag = matrix.numel() % (self.matrix_block_size * self.vector_dim) != 0
-            too_small_flag = matrix.numel() // (self.matrix_block_size * self.vector_dim) < 2
+            impossible_to_divide_flag = matrix.numel() % (self.matrix_block_size) != 0
+            too_small_flag = matrix.numel() // (self.matrix_block_size) < 2
             
             if impossible_to_divide_flag or too_small_flag:
                 warnings.warn(
@@ -80,11 +82,10 @@ class AutoKmeans:
                 vectors = matrix.reshape(-1, self.vector_dim)
                 weights = hess.reshape(-1, self.vector_dim)
             else:
-                vectors = matrix.reshape(-1, self.matrix_block_size, self.vector_dim)
-                weights = hess.reshape(-1, self.matrix_block_size, self.vector_dim)
-        
+                vectors = matrix.reshape(-1, self.matrix_block_size//self.vector_dim, self.vector_dim)
+                weights = hess.reshape(-1, self.matrix_block_size//self.vector_dim, self.vector_dim)
 
-        # apply weighting type
+        # Apply weighting type
         if self.weighting_type=='PERVECTOR':
             weights = torch.linalg.norm(weights, axis=-1).unsqueeze(-1)
         elif self.weighting_type=='PERCOORD':
@@ -93,6 +94,10 @@ class AutoKmeans:
             weights = None
         else:
             raise RuntimeError(f'prepare_vectors::error: uknown weighting_type <{self.weighting_type}>')
+
+        # Apply absolute coordinates if the flag is set
+        if self.use_absolute_coordinates:
+            vectors = torch.abs(vectors)
 
         return {
             'vectors' : vectors,
@@ -195,6 +200,7 @@ class AutoKmeans:
             batch_size=None,
             num_iters=None,
             description=None,
+            verbose=True,
         ):
         batch_size=batch_size if batch_size is not None else self.batch_size
         num_iters=num_iters if num_iters is not None else self.num_iters
@@ -202,31 +208,44 @@ class AutoKmeans:
         assert batch_size is not None
         assert num_iters is not None
 
-        # set device
+        # Set device
         vectors = vectors.to(self.device)
         weights = weights.to(self.device)
         
-        # set n_batches
+        # Set n_batches
         n_batches = self._set_n_batches(vectors=vectors, batch_size=batch_size)
 
-        # set initial centroids
+        # Set initial centroids
         centroids = self._init_centroids(vectors=vectors, weights=weights)
     
-        # main loop
-        for _ in tqdm(range(num_iters), desc=description, unit="iter", leave=True):
-            # compute cluster assignments
+        #Main loop
+
+
+        iterator = tqdm(range(num_iters), desc=description, unit="iter", leave=True) if verbose else range(num_iters)
+
+        for _ in iterator:
+            # Compute cluster assignments
             cluster_assignments = self._compute_assigments(
                 vectors=vectors, 
                 centroids=centroids,
                 batch_size=batch_size,
                 n_batches=n_batches
             )
-            # update cluster centers
+            # Update cluster centers
             self._update_centroids(
                 cluster_assignments=cluster_assignments, 
                 vectors=vectors, 
                 weights=weights, 
                 centroids=centroids
             )
+
+        # Reassine last time
+        cluster_assignments = self._compute_assigments(
+            vectors=vectors, 
+            centroids=centroids,
+            batch_size=batch_size,
+            n_batches=n_batches
+        )
         # free_unused_memory()
+        
         return cluster_assignments, centroids

@@ -23,9 +23,8 @@ training_params:
 
     method_params:
       reassine_params:
-        #nn_search_dist: L2
         reassine_frac: 0.2
-      with_additions: True
+      use_latent_weight: True
 
     scheduler: &scheduler
       class: CosineAnnealingLR

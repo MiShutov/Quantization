@@ -13,7 +13,7 @@ from qlib.ptq.homequant_ptq_utils import (
     prepare_block_for_inference
 )
 
-
+from qlib.qlayers.homequant_layers import HQLayer
 from qlib.ptq.ptq_logger import LoggerPTQ
 from qlib.utils.memmory import free_unused_memory
 
@@ -56,8 +56,13 @@ class HomequantTrainerPTQ():
     def train_block(
             self, 
             block,
+            path_to_fp_block=None,
         ):
-        prepare_block_for_training(block, self.optimization_config.get('method_params'))
+        prepare_block_for_training(
+            block,
+            HQLayer,
+            self.optimization_config.get('method_params'), 
+            path_to_fp_block)
         block.train()
         
         loss_fn = self.optimization_config['loss_fn']
@@ -100,8 +105,7 @@ class HomequantTrainerPTQ():
                     if len(metadata.get(key, [])) == 0:
                         return 0
                     else:
-                        metadata[key][-1]
-
+                        return metadata[key][-1]
                 self.logger.log_scalar(
                     dir='train', 
                     scalar_name='new_indices_ratio (self_attn.q_proj)', 
@@ -170,10 +174,10 @@ class HomequantTrainerPTQ():
 
     @torch.no_grad()
     def validation(self, block, step):
-        switch_trainable(block, False)
+        switch_trainable(block, False, HQLayer)
         val_loss = self.validate(block)
         self.logger.log_scalar(dir='val', scalar_name='loss', scalar=val_loss, step=step)
-        switch_trainable(block, True)
+        switch_trainable(block, True, HQLayer)
 
     @torch.no_grad()
     def validate(self, block):
@@ -230,7 +234,7 @@ class HomequantTrainerPTQ():
         #q
         block = torch.load(path_to_q_block, map_location=self.device_map)
         if train:
-            self.train_block(block)
+            self.train_block(block, path_to_fp_block)
         self.collect_block_activations(block, self.activation_storage.train_q, with_input_preparation)
         self.collect_block_activations(block, self.activation_storage.val_q, with_input_preparation)
         torch.save(block, path_to_q_block_trained)

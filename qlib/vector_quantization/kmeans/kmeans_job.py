@@ -1,12 +1,13 @@
 import os
 import torch
 from qlib.vector_quantization.kmeans.auto_kmeans import AutoKmeans
+from qlib.utils.pack_effective import pack_bool_tensor
 from tqdm import trange
 
 from dataclasses import dataclass, asdict
 from typing import Literal
 
-SAVING_TEMPLATE = 'cb{cb_size}_vecdim{vecdim}_weight{weighting}_scale{scale}_dist{dist}_blocksize{matrix_block_size}_iters{num_iters}'
+SAVING_TEMPLATE = 'cb{cb_size}_vecdim{vecdim}_weight{weighting}_scale{scale}_dist{dist}_blocksize{matrix_block_size}_iters{num_iters}{use_absolute_coordinates}'
 
 @dataclass
 class KmeasJobParams:
@@ -23,23 +24,44 @@ class KmeasJobParams:
     init_type: Literal["TOPK", "RANDOM"] = 'RANDOM'
     batch_size: int = 2**14
     matrix_block_size: int = None
+    use_absolute_coordinates: bool = False
     eps: float = 1e-8
 
 
 def save_result(indices, codebook, scales, params):
     metadata = asdict(params)
+
     del metadata['matrix']
     del metadata['hess']
     del metadata['path_to_save']
     del metadata['batch_size']
+    
+    indices_max = indices.max()
+    if indices_max < 2**8:
+        indices_dtype = torch.uint8
+    elif indices_max < 2**16:
+        indices_dtype = torch.uint16
+    else:
+        indices_dtype = torch.uint32
 
     save_chekpoint = {
-        'indices': indices,
+        'indices': indices.to(indices_dtype),
         'codebook': codebook,
         'scales': scales,
         'metadata': metadata
     }
     
+    if params.use_absolute_coordinates:
+        packed, shape = pack_bool_tensor(
+            (1+torch.sign(params.matrix)).bool()
+        )
+        save_chekpoint.update({
+            'signs': {
+                'packed': packed,
+                'shape': shape,
+            }
+        })
+
     path2save = os.path.join(
         params.path_to_save,
         SAVING_TEMPLATE.format(
@@ -49,7 +71,8 @@ def save_result(indices, codebook, scales, params):
             scale=params.scale_type,
             dist=params.distance_type,
             matrix_block_size=params.matrix_block_size,
-            num_iters=params.num_iters
+            num_iters=params.num_iters,
+            use_absolute_coordinates='_abscoords' if params.use_absolute_coordinates else ''
         )
     )
 
@@ -64,7 +87,7 @@ def run_kmeans(cluster_computer, prepared_vectors_data):
     if vectors.ndim == 2:
         indices, centroids = cluster_computer.run(
             vectors=vectors,
-            weights=weights,
+            weights=weights
         )
         return indices.cpu(), centroids.cpu()
 
@@ -78,16 +101,17 @@ def run_kmeans(cluster_computer, prepared_vectors_data):
             indxs, centroids = cluster_computer.run(
                 vectors=vectors[i_block],
                 weights=weights[i_block],
+                verbose=False,
             )
             indices_list.append(indxs.cpu())
             centroids_list.append(centroids.cpu())
 
         return torch.stack(indices_list).cpu(), torch.stack(centroids_list).cpu()
 
-
-def reconstruct_matrix(indices, codebook, scales, matrix_shape):
+@torch.no_grad()
+def reconstruct_matrix(indices, codebook, scales, params):
     if codebook.ndim == 2:
-        matrix = codebook[indices].reshape(matrix_shape)
+        matrix = codebook[indices].reshape(params.matrix.shape)
     
     elif codebook.ndim == 3:
         n_blocks = indices.shape[0]
@@ -96,11 +120,14 @@ def reconstruct_matrix(indices, codebook, scales, matrix_shape):
             indices_part = indices[i_block]
             codebook_part = codebook[i_block]
             all_vectors.append(codebook_part[indices_part])
-        matrix = torch.stack(all_vectors).reshape(matrix_shape)
+        matrix = torch.stack(all_vectors).reshape(params.matrix.shape)
 
     if scales is not None:
         matrix *= scales
     
+    if params.use_absolute_coordinates:
+        matrix *= torch.sign(params.matrix)
+
     return matrix
 
 @torch.no_grad()
@@ -117,6 +144,7 @@ def kmeas_job(
             distance_type=params.distance_type,
             num_centroids=params.codebook_size,
             matrix_block_size=params.matrix_block_size,
+            use_absolute_coordinates=params.use_absolute_coordinates,
             init_type=params.init_type,
             num_iters=params.num_iters,
             batch_size=params.batch_size,
@@ -134,7 +162,7 @@ def kmeas_job(
     save_result(indices, codebook, prepared_vectors_data['scales'], params)
     
     # compute mse
-    matrix_quantized = reconstruct_matrix(indices, codebook, prepared_vectors_data['scales'], params.matrix.shape)
+    matrix_quantized = reconstruct_matrix(indices, codebook, prepared_vectors_data['scales'], params)
     error = ((matrix_quantized-params.matrix)**2).mean().item()
 
     return {

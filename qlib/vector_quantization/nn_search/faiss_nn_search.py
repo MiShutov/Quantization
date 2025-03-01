@@ -7,27 +7,27 @@ faiss_settings = {
     'nprobe' : 8
 }
 
-search_dist_map = {
-    'L2': faiss.METRIC_L2,
-    'L1': faiss.METRIC_L1,
-}
 
 @torch.no_grad()
 def reassign(vectors, codebook, reassine_params):
     quantizer = faiss.IndexFlatL2(faiss_settings['vector_dim'])
-    index_ivf = faiss.IndexIVFFlat(
+    faiss_index = faiss.IndexIVFFlat(
         quantizer, 
         faiss_settings['vector_dim'], 
         faiss_settings['nlist'], 
-        #search_dist_map[reassine_params.get('nn_search_dist', 'L2')], 
     )
-
-    gpu_index_ivf = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, index_ivf)
-    gpu_index_ivf.nprobe = faiss_settings['nprobe']
-
-    gpu_index_ivf.train(codebook)
-    gpu_index_ivf.add(codebook)
-
-    indices = gpu_index_ivf.search(vectors, 1)[1][:, 0]
-
+    faiss_index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, faiss_index)
+    faiss_index.nprobe = faiss_settings['nprobe']
+    faiss_index.train(codebook)
+    faiss_index.add(codebook)
+    indices = faiss_index.search(vectors, 1)[1][:, 0]
     return indices
+
+
+# @torch.no_grad()
+# def reassign(vectors, codebook, reassine_params=None):
+#     faiss_index = faiss.IndexFlatL2(faiss_settings['vector_dim'])
+#     faiss_index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), 0, faiss_index)
+#     faiss_index.add(codebook)
+#     indices = faiss_index.search(vectors, 1)[1][:, 0]
+#     return indices
