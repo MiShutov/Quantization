@@ -1,7 +1,14 @@
+### create env
 # conda create --name qenv python=3.10
 # conda activate qenv
+
+### install faiss
 # conda install -c pytorch -c nvidia -c rapidsai -c conda-forge libnvjitlink faiss-gpu-cuvs=1.10.0
+
+### install libs
 # pip install -r requirements.txt
+
+### install fast-hadamard-transform
 # git clone https://github.com/Dao-AILab/fast-hadamard-transform.git
 # cd fast-hadamard-transform/
 # pip isntall .
