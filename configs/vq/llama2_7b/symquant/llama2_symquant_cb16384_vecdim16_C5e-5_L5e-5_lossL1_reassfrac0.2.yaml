@@ -1,0 +1,49 @@
+logdir: /home/msst/repo/Quantization/logs/llama2-7b/symquant/llama2_symquant_cb16384_vecdim16_C5e-5_L5e-5_lossL1_reassfrac0.2
+model_name: Llama2-7b-hf
+fp_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_fp
+q_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_q/cb16384_vecdim16_weightPERCOORD_scaleOUTL2_distMSE_blocksizeNone_iters10_abscoords
+
+
+training_params:
+  train_data:
+    dataset_name: slim_pajama
+    split: train[:2000]
+    seq_length: 4096
+    n_train_seq: &n_train_seq 128 #256 #384
+    n_val_seq: 24 #48
+    batch_size: &batch_size 2
+
+  validation_settings:
+    val_before_trainig: True
+    n_intermediate_val: 8
+
+  optimization_settings:
+    n_epochs: 2
+    loss_fn: !L1
+
+    method_params:
+      use_latent_weight: True
+      reassine_params:
+        reassine_frac: 0.2
+        nlist: 256
+        nprobe: 8
+
+    scheduler: &scheduler
+      class: CosineAnnealingLR
+      kwargs:
+        T_max: 256
+
+    optimizers:
+      codebook_optimizer:
+        param_label: codebook
+        class: Adam
+        kwargs:
+          lr: 5e-5
+        scheduler: *scheduler
+
+      latent_optimizer:
+        param_label: latent_weight
+        class: Adam 
+        kwargs:
+          lr: 5e-5
+        scheduler: *scheduler

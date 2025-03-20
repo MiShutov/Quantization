@@ -1,10 +1,11 @@
 import torch
+from qlib.utils.pack_effective import pack_bool_tensor
 
 
 @torch.no_grad()
 def prepare_block_for_training(
     block: torch.nn.Module,
-    wrap_classes: list, 
+    quant_classes: list, 
     method_params={},
     path_to_fp_block=None):
 
@@ -13,19 +14,18 @@ def prepare_block_for_training(
         fp_block = torch.load(path_to_fp_block, map_location='cuda')
 
     for module_name, module in block.named_modules():
-        if (module.__class__ in wrap_classes):
+        if (module.__class__ in quant_classes):
             module.trainable = True
             if method_params.get('use_latent_weight', False):
-                #module.latent_weight = torch.nn.Parameter(module.weight.clone())
                 module.latent_weight = torch.nn.Parameter(fp_block.get_submodule(module_name).weight.clone().to(torch.float32))
 
+            if hasattr(module, 'signs') and hasattr(module, 'latent_weight'):
+                del module.signs
 
             if method_params.get('reassine_params', False):
                 module.reassine_params = method_params['reassine_params']
             module.metadata = {
                 'new_indices_ratio': [],
-                # 'weight_change_relative': [],
-                # 'weight_change_absolute': [],
             }
 
     if method_params.get('with_additions'):
@@ -33,20 +33,22 @@ def prepare_block_for_training(
 
 
 @torch.no_grad()
-def switch_trainable(block: torch.nn.Module, mode, wrap_classes: list):
+def switch_trainable(block: torch.nn.Module, mode, quant_classes: list):
     for module_name, module in block.named_modules():
-        if (module.__class__ in wrap_classes):
+        if (module.__class__ in quant_classes):
             module.trainable = mode
 
 
 @torch.no_grad()
-def prepare_block_for_inference(block: torch.nn.Module, wrap_classes: list):
+def prepare_block_for_inference(block: torch.nn.Module, quant_classes: list):
     for module_name, module in block.named_modules():
-        if (module.__class__ in wrap_classes) and hasattr(module, 'latent_weight'):
+        if (module.__class__ in quant_classes) and hasattr(module, 'latent_weight'):
+            packed_signs, _ = pack_bool_tensor((1+torch.sign(module.latent_weight)).bool())
+            module.register_buffer('signs', packed_signs)
             del module.latent_weight
-        if (module.__class__ in wrap_classes) and hasattr(module, 'metadata'):
+        if (module.__class__ in quant_classes) and hasattr(module, 'metadata'):
             del module.metadata
-        if (module.__class__ in wrap_classes) and hasattr(module, 'reassine_params'):
+        if (module.__class__ in quant_classes) and hasattr(module, 'reassine_params'):
             del module.reassine_params
         module.trainable = False
 

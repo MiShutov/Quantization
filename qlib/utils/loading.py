@@ -38,7 +38,7 @@ def get_data(dataset_name, split, tokenizer):
 
 
 class QATDataset(Dataset):
-    def __init__(self, config, tokenizer):
+    def __init__(self, config, tokenizer=None, return_dict=False, return_dict_with_labels=False):
         '''
         dataloader.yaml example:
         
@@ -50,7 +50,8 @@ class QATDataset(Dataset):
         '''
         self.tokenizer = tokenizer
         self.config = config
-
+        self.return_dict = return_dict
+        self.return_dict_with_labels = return_dict_with_labels
         self.batch_size = self.config['batch_size']
         self.seq_length = self.config['seq_length']
         self.token_seq = get_data(
@@ -78,7 +79,9 @@ class QATDataset(Dataset):
 
         begin_loc = self.seq_length * rand_index
         end_loc = self.seq_length * (rand_index+1)
-        batch = self.token_seq[0, begin_loc:end_loc]
+        batch = self.token_seq[0, begin_loc:end_loc]      
+        if self.return_dict:
+            return {'input_ids' : batch}
         return batch
 
     def get_dataloader(self):

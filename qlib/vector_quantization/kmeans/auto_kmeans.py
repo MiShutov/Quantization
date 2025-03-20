@@ -1,6 +1,8 @@
 import torch
 import warnings
 from tqdm import tqdm
+from qlib import incoherence_preprocess, HaarWavelet
+from qlib.utils.pack_effective import pack_bool_tensor
 
 
 class AutoKmeans:
@@ -17,6 +19,8 @@ class AutoKmeans:
             batch_size=2**16,
             eps=1e-8,
             use_absolute_coordinates=False,
+            haar_decomposition_level=None,
+            use_incoherence_processing=False,
             matrix_block_size=None,
         ):
         self.device = device
@@ -28,6 +32,8 @@ class AutoKmeans:
         # Optional
         self.matrix_block_size = matrix_block_size
         self.use_absolute_coordinates = use_absolute_coordinates
+        self.haar_decomposition_level = haar_decomposition_level
+        self.use_incoherence_processing = use_incoherence_processing
         self.batch_size = batch_size
         self.num_centroids = num_centroids
         self.num_iters = num_iters
@@ -40,9 +46,13 @@ class AutoKmeans:
             matrix,
             hess,
         ):
+        matrix=matrix.to(self.device)
+        hess=hess.to(self.device)
 
-        matrix = matrix.to(self.device)
-        hess = hess.to(self.device)
+
+        SU, SV = None, None
+        if self.use_incoherence_processing:
+            matrix, SU, SV = incoherence_preprocess(matrix)
 
         # Scale matrix
         if self.scale_type == 'OUTL2':
@@ -66,10 +76,31 @@ class AutoKmeans:
         hess /= hess.mean()
 
         # Prepere matrix blocks if needed
-        if self.matrix_block_size is None:
-            vectors = matrix.reshape(-1, self.vector_dim)
-            weights = hess.reshape(-1, self.vector_dim)
-        else:
+        if self.haar_decomposition_level is not None: # use haar decomposition
+            haar_exrtactor = HaarWavelet(level=self.haar_decomposition_level, 
+                                         dtype=torch.float32,
+                                         device=self.device)
+            decomposed_matrix = haar_exrtactor(matrix)
+            B, H, W = decomposed_matrix.shape
+            vectors = decomposed_matrix.reshape(B, -1, self.vector_dim)
+            
+            # # test test test
+            maxpooled_hess = torch.nn.functional.max_pool2d(
+                hess[None, :, :], 
+                kernel_size=2**self.haar_decomposition_level, 
+                stride=2**self.haar_decomposition_level
+            )[0]
+            maxpooled_hess = maxpooled_hess.expand(
+                4**self.haar_decomposition_level,
+                *maxpooled_hess.shape
+            )
+            weights = maxpooled_hess.reshape(B, -1, self.vector_dim)
+            # # test test test
+
+            #print("ATTENTION: not use weighting with haar decomposition - set weights as ones!")
+            #weights = torch.ones_like(vectors)
+
+        elif self.matrix_block_size is not None:  # divide matrix into blocks
             impossible_to_divide_flag = matrix.numel() % (self.matrix_block_size) != 0
             too_small_flag = matrix.numel() // (self.matrix_block_size) < 2
             
@@ -84,6 +115,9 @@ class AutoKmeans:
             else:
                 vectors = matrix.reshape(-1, self.matrix_block_size//self.vector_dim, self.vector_dim)
                 weights = hess.reshape(-1, self.matrix_block_size//self.vector_dim, self.vector_dim)
+        else: # default             
+            vectors = matrix.reshape(-1, self.vector_dim)
+            weights = hess.reshape(-1, self.vector_dim)
 
         # Apply weighting type
         if self.weighting_type=='PERVECTOR':
@@ -95,14 +129,29 @@ class AutoKmeans:
         else:
             raise RuntimeError(f'prepare_vectors::error: uknown weighting_type <{self.weighting_type}>')
 
+        packed_signs = None
+        weight_shape = matrix.shape
         # Apply absolute coordinates if the flag is set
         if self.use_absolute_coordinates:
             vectors = torch.abs(vectors)
 
+            if self.haar_decomposition_level is not None: # use haar decomposition
+                packed_signs, weight_shape = pack_bool_tensor(
+                    (1+torch.sign(decomposed_matrix)).bool()
+                )
+            else:
+                packed_signs, weight_shape = pack_bool_tensor(
+                    (1+torch.sign(matrix)).bool()
+                )
+
         return {
             'vectors' : vectors,
             'weights' : weights,
-            'scales': scales
+            'scales': scales,
+            'packed_signs': packed_signs,
+            'weight_shape': weight_shape,
+            'SU': SU,
+            'SV': SV, 
         }
 
     @torch.no_grad()
@@ -113,7 +162,7 @@ class AutoKmeans:
             batch_size=n_vectors
         else:
             n_batches = n_vectors//batch_size
-        
+
         assert n_batches*batch_size == n_vectors
         return n_batches
 
@@ -148,10 +197,18 @@ class AutoKmeans:
             n_batches
         ):
         all_cluster_assignments = []
+        if batch_size==-1 and n_batches==1:
+            batch_size=vectors.shape[0]
         for batch_idx in range(n_batches):
             batch = vectors[batch_idx*batch_size:(batch_idx+1)*batch_size]
             if self.distance_type=='MSE':
                 distances = torch.cdist(batch, centroids)
+            elif self.distance_type=='MAE':
+                assert batch.min() >= 0
+                assert centroids.min() >= 0
+                distances = torch.cdist(torch.sqrt(batch), torch.sqrt(centroids))
+            elif self.distance_type=='M4':
+                distances = torch.cdist(batch**2, centroids**2)
             elif self.distance_type=='WEIGHTED_MSE':
                 distances = torch.cdist(batch, centroids["centroids"])
                 distances = distances * centroids['centroid_weigths']

@@ -1,13 +1,14 @@
 import os
 import torch
 from qlib.vector_quantization.kmeans.auto_kmeans import AutoKmeans
-from qlib.utils.pack_effective import pack_bool_tensor
+from qlib.utils.pack_effective import unpack_bool_tensor
+from qlib import incoherence_process, batch_gathering, HaarWavelet
 from tqdm import trange
 
 from dataclasses import dataclass, asdict
 from typing import Literal
 
-SAVING_TEMPLATE = 'cb{cb_size}_vecdim{vecdim}_weight{weighting}_scale{scale}_dist{dist}_blocksize{matrix_block_size}_iters{num_iters}{use_absolute_coordinates}'
+SAVING_TEMPLATE = 'cb{cb_size}_vecdim{vecdim}_weight{weighting}_scale{scale}_dist{dist}_blocksize{matrix_block_size}_iters{num_iters}{use_absolute_coordinates}{use_incoherence_processing}{haar_decomposition_level}'
 
 @dataclass
 class KmeasJobParams:
@@ -25,10 +26,12 @@ class KmeasJobParams:
     batch_size: int = 2**14
     matrix_block_size: int = None
     use_absolute_coordinates: bool = False
+    haar_decomposition_level: int = None
+    use_incoherence_processing: bool = False
     eps: float = 1e-8
 
 
-def save_result(indices, codebook, scales, params):
+def save_result(indices, codebook, prepared_vectors_data, params):
     metadata = asdict(params)
 
     del metadata['matrix']
@@ -47,18 +50,21 @@ def save_result(indices, codebook, scales, params):
     save_chekpoint = {
         'indices': indices.to(indices_dtype),
         'codebook': codebook,
-        'scales': scales,
+        'scales': prepared_vectors_data['scales'],
         'metadata': metadata
     }
     
+    if params.use_incoherence_processing:
+        save_chekpoint.update({
+            'SU': prepared_vectors_data['SU'],
+            'SV': prepared_vectors_data['SV'],
+        })
+
     if params.use_absolute_coordinates:
-        packed, shape = pack_bool_tensor(
-            (1+torch.sign(params.matrix)).bool()
-        )
         save_chekpoint.update({
             'signs': {
-                'packed': packed,
-                'shape': shape,
+                'packed': prepared_vectors_data['packed_signs'],
+                'shape': prepared_vectors_data['weight_shape'],
             }
         })
 
@@ -72,7 +78,9 @@ def save_result(indices, codebook, scales, params):
             dist=params.distance_type,
             matrix_block_size=params.matrix_block_size,
             num_iters=params.num_iters,
-            use_absolute_coordinates='_abscoords' if params.use_absolute_coordinates else ''
+            use_absolute_coordinates='_abscoords' if params.use_absolute_coordinates else '',
+            use_incoherence_processing='_incoherence' if params.use_incoherence_processing else '',
+            haar_decomposition_level=f'_haar{params.haar_decomposition_level}' if params.haar_decomposition_level is not None else '',
         )
     )
 
@@ -109,24 +117,43 @@ def run_kmeans(cluster_computer, prepared_vectors_data):
         return torch.stack(indices_list).cpu(), torch.stack(centroids_list).cpu()
 
 @torch.no_grad()
-def reconstruct_matrix(indices, codebook, scales, params):
+def reconstruct_matrix(indices, codebook, prepared_vectors_data, params):
     if codebook.ndim == 2:
-        matrix = codebook[indices].reshape(params.matrix.shape)
-    
-    elif codebook.ndim == 3:
+        matrix = codebook[indices].reshape(prepared_vectors_data['weight_shape'])
+
+    elif codebook.ndim == 3 and params.haar_decomposition_level is not None:   
+        freq_shape = prepared_vectors_data['weight_shape']
+        freq = batch_gathering(codebook, indices).reshape(freq_shape)
+        if params.use_absolute_coordinates:
+            freq *= (2 * unpack_bool_tensor(prepared_vectors_data['packed_signs'], prepared_vectors_data['weight_shape']) - 1).cpu()
+
+        matrix = HaarWavelet(level=params.haar_decomposition_level, device=freq.device).inverse(freq)
+
+    elif codebook.ndim == 3:        
         n_blocks = indices.shape[0]
         all_vectors = []
         for i_block in range(n_blocks):
             indices_part = indices[i_block]
             codebook_part = codebook[i_block]
             all_vectors.append(codebook_part[indices_part])
-        matrix = torch.stack(all_vectors).reshape(params.matrix.shape)
+        matrix = torch.stack(all_vectors).reshape(prepared_vectors_data['weight_shape'])
+    else: 
+        raise
 
-    if scales is not None:
-        matrix *= scales
+    matrix = matrix.cpu()
+
+    if prepared_vectors_data['scales'] is not None:
+        matrix *= prepared_vectors_data['scales'].cpu()
     
-    if params.use_absolute_coordinates:
-        matrix *= torch.sign(params.matrix)
+    # if params.use_absolute_coordinates:
+    #     matrix *= (2 * unpack_bool_tensor(prepared_vectors_data['packed_signs'], prepared_vectors_data['weight_shape']) - 1).cpu()
+
+    if params.use_incoherence_processing:
+        matrix = incoherence_process(
+            matrix.cuda(), 
+            prepared_vectors_data['SU'], 
+            prepared_vectors_data['SV'],
+        ).cpu()
 
     return matrix
 
@@ -145,6 +172,8 @@ def kmeas_job(
             num_centroids=params.codebook_size,
             matrix_block_size=params.matrix_block_size,
             use_absolute_coordinates=params.use_absolute_coordinates,
+            haar_decomposition_level=params.haar_decomposition_level,
+            use_incoherence_processing=params.use_incoherence_processing,
             init_type=params.init_type,
             num_iters=params.num_iters,
             batch_size=params.batch_size,
@@ -159,10 +188,10 @@ def kmeas_job(
 
     indices, codebook = run_kmeans(cluster_computer, prepared_vectors_data)
 
-    save_result(indices, codebook, prepared_vectors_data['scales'], params)
+    save_result(indices, codebook, prepared_vectors_data, params)
     
     # compute mse
-    matrix_quantized = reconstruct_matrix(indices, codebook, prepared_vectors_data['scales'], params)
+    matrix_quantized = reconstruct_matrix(indices, codebook, prepared_vectors_data, params)
     error = ((matrix_quantized-params.matrix)**2).mean().item()
 
     return {

@@ -1,5 +1,6 @@
 import torch
 
+@torch.no_grad()
 def pack_bool_tensor(x):
     """
     Packs a boolean tensor (2D or 3D) into a uint8 tensor.
@@ -18,25 +19,16 @@ def pack_bool_tensor(x):
     # Pad to ensure length is a multiple of 8
     original_size = x_flat.numel()
     pad_size = (8 - (original_size % 8)) % 8
-    x_padded = torch.cat([x_flat, torch.zeros(pad_size, dtype=torch.bool)])
+    x_padded = torch.cat([x_flat, torch.zeros(pad_size, dtype=torch.bool, device=x_flat.device)])
 
     # Pack 8 booleans into 1 byte (uint8)
     x_packed = x_padded.view(-1, 8)  # Reshape into groups of 8 bits
-    bit_weights = torch.tensor([1, 2, 4, 8, 16, 32, 64, 128], dtype=torch.uint8)
+    bit_weights = torch.tensor([1, 2, 4, 8, 16, 32, 64, 128], dtype=torch.uint8, device=x_flat.device)
     x_packed = (x_packed * bit_weights).sum(dim=1).to(torch.uint8)
 
     return x_packed, original_shape
 
-# Example usage for 2D tensor
-x_2d = (torch.randn(1024, 1024) > 0).bool()
-packed_2d, shape_2d = pack_bool_tensor(x_2d)
-torch.save({"packed": packed_2d, "original_shape": shape_2d}, "packed_2d_tensor.pth")
-
-# Example usage for 3D tensor
-x_3d = (torch.randn(3, 1024, 1024) > 0).bool()
-packed_3d, shape_3d = pack_bool_tensor(x_3d)
-torch.save({"packed": packed_3d, "original_shape": shape_3d}, "packed_3d_tensor.pth")
-
+@torch.no_grad()
 def unpack_bool_tensor(packed, original_shape):
     """
     Unpacks a uint8 tensor into a boolean tensor of the original shape.
