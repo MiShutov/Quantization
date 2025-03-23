@@ -88,7 +88,8 @@ training_params:
 
   optimization_settings:
     n_epochs: 4
-    loss_fn: !MSE
+    loss_fn: !LpLoss
+      p: 2
 
     scheduler: &scheduler
       class: CosineAnnealingLR

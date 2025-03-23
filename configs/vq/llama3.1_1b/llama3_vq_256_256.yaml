@@ -66,7 +66,8 @@ training_params:
 
   optimization:
     n_epochs: 2
-    loss_fn: !MSE #!MAE
+    loss_fn: !LpLoss
+      p: 2
 
     optimizers:
       # codebook_optimizer:

@@ -46,58 +46,10 @@ class SymHQLinear(nn.Module):
 
     @property
     def weight(self):
-        # if self.codebook.ndim == 2:
-        #     w = self.codebook(self.indices.to(torch.int)).reshape(self.weight_shape)
-        
-        # elif self.codebook.ndim == 3:
-        #     n_blocks = self.indices.shape[0]
-        #     all_vectors = []
-        #     for i_block in range(n_blocks):
-        #         indices_part = self.indices[i_block]
-        #         codebook_part = self.codebook[i_block]
-        #         all_vectors.append(codebook_part[indices_part.to(torch.int)])
-        #     w = torch.stack(all_vectors).reshape(self.weight_shape)
         w = self.codebook(self.indices.to(torch.int)).reshape(self.weight_shape)
         if self.scales is not None:
             w *= self.scales
         return w
-
-
-    @torch.no_grad()
-    def update_indices_ptq(self):
-        if self.reassine_params.get("reassine_frac", 0.0) == 0.0:
-            return
-        
-        # Which vectors to reassign        
-        n_vectors_to_reassign = int(torch.numel(self.weight) // self.vector_dim * self.reassine_params.get("reassine_frac", 1.0))
-        vector_ids_to_reassign = torch.topk(
-            torch.max((
-                    torch.abs(torch.abs(self.latent_weight) - self.weight) / (torch.abs(self.weight) + 1e-10)
-            ).reshape(-1, self.vector_dim), dim=1).values,
-            n_vectors_to_reassign
-        ).indices.to(torch.int)
-
-        # Get vectors to reassign
-        if self.scales is not None:
-            vectors = (self.latent_weight / self.scales).reshape(-1, self.vector_dim)[vector_ids_to_reassign]
-        else:
-            vectors = self.latent_weight.reshape(-1, self.vector_dim)[vector_ids_to_reassign]
-        
-        # Compute reassigns
-        new_indices = torch.tensor(
-            reassign(torch.abs(vectors.cpu()), self.codebook.weight.data.cpu(), self.reassine_params),
-            dtype=self.indices.dtype, 
-            device=self.indices.device
-        ).to(torch.int)
-        self.indices = self.indices.to(torch.int)
-        
-        # Log reassigns
-        self.metadata['new_indices_ratio'].append(
-            get_reassign_ratio(self.indices.data[vector_ids_to_reassign], new_indices) * self.reassine_params.get("reassine_frac", 1.0)
-        )
-        
-        # Set new indices
-        self.indices.data[vector_ids_to_reassign] = new_indices
 
 
     @torch.no_grad()
@@ -140,17 +92,46 @@ class SymHQLinear(nn.Module):
         return F.linear(x, w)
 
 
-    def _train_ptq(self, x):
-        assert hasattr(self, 'latent_weight')
+    @torch.no_grad()
+    def update_indices(self):
+        if self.indices.dtype == torch.uint16:
+            self.indices = self.indices.int()
+
+        reassine_frac = self.reassine_params["reassine_frac"]
+
+        # Which vectors to reassign        
+        n_vectors_to_reassign = int(torch.numel(self.weight) // self.vector_dim * reassine_frac)
+        vector_ids_to_reassign = torch.topk(
+            torch.max((
+                    torch.abs(torch.abs(self.latent_weight) - self.weight) / (torch.abs(self.weight) + 1e-10)
+            ).reshape(-1, self.vector_dim), dim=1).values,
+            n_vectors_to_reassign
+        ).indices.to(torch.int)
+
+        # Get vectors to reassign
+        if self.scales is not None:
+            vectors = (self.latent_weight / self.scales).reshape(-1, self.vector_dim)[vector_ids_to_reassign]
+        else:
+            vectors = self.latent_weight.reshape(-1, self.vector_dim)[vector_ids_to_reassign]
         
-        self.update_indices_ptq()
+        # Compute reassigns
+        new_indices = reassign(torch.abs(vectors), self.codebook.weight.data, self.reassine_params)
         
-        w = self.weight * torch.sign(self.latent_weight).detach()
-        
-        return F.linear(
-            x, w# + self.latent_weight - self.latent_weight.detach()
+        # Log reassigns
+        self.metadata['new_indices_ratio'].append(
+            get_reassign_ratio(self.indices.data[vector_ids_to_reassign.int()], new_indices.int()) * reassine_frac
         )
-    
+        # Set new indices
+        self.indices.data[vector_ids_to_reassign] = new_indices.to(self.indices.dtype)
+
+
+    def _reassign_forward(self, x):
+        assert hasattr(self, 'latent_weight')
+        self.update_indices()
+        w = self.weight * torch.sign(self.latent_weight).detach()
+        return F.linear(
+            x, w + self.latent_weight - self.latent_weight.detach()
+        )
 
     def _inference_forward(self, x):
         if hasattr(self, 'signs'):
@@ -166,13 +147,16 @@ class SymHQLinear(nn.Module):
 
 
     def forward(self, x):
-        if self.trainable == 'qat':
-            return self._train_qat(x)
-        
-        elif self.trainable == True:
-            return self._train_ptq(x)
-        else: # self.trainable == False
+        if self.trainable == False:
             return self._inference_forward(x)
+        
+        else: # (self.trainable == True)
+            training_features = self.train_mode.split(':')
+            if 'reassines' in training_features:
+                return self._reassign_forward(x)
+            else:
+                return self._inference_forward(x)
+
 
 
 class HaarSymHQLinear(nn.Module):

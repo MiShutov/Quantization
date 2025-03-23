@@ -54,6 +54,39 @@ class HomequantTrainerPTQ():
             "position_embeddings" : position_embeddings,
         }
 
+    def log_reassigns(self, block, step):
+        names = [
+            'self_attn.q_proj',
+            'self_attn.k_proj',
+            'self_attn.v_proj',
+            'self_attn.o_proj',
+            'mlp.down_proj',
+            'mlp.gate_proj',
+            'mlp.up_proj',
+        ]
+
+        def check_metadata(metadata, key):
+            data = metadata.get(key, None)
+            if data is None:
+                return None
+            else:
+                if len(data) > 0:
+                    return data[-1]
+                else:
+                    print('check_metadata::reassigns not logged!')
+                    return 0.0
+
+        for name in names:
+            submodule_meta = block.get_submodule(name).metadata
+            reassigns_data = check_metadata(submodule_meta, 'new_indices_ratio')
+            if reassigns_data is not None:
+                self.logger.log_scalar(
+                    dir='train', 
+                    scalar_name=f'new_indices_ratio ({name})', 
+                    scalar=reassigns_data,
+                    step=step
+                )
+
 
     @torch.enable_grad()
     def train_block(
@@ -64,7 +97,7 @@ class HomequantTrainerPTQ():
         prepare_block_for_training(
             block,
             self.quant_classes,
-            self.optimization_config.get('method_params'), 
+            self.optimization_config.get('method_params', {}), 
             path_to_fp_block)
         block.train()
         
@@ -99,59 +132,14 @@ class HomequantTrainerPTQ():
                 with torch.amp.autocast('cuda', dtype=self.autocast_dtype):
                     q_act = block(**q_input)[0]
                     loss = loss_fn(q_act, fp_act)
-                
+
                 grad_scaler = optimizers['grad_scaler']
                 grad_scaler.scale(loss).backward()
 
-
-                # def check_if_metadata_exists(metadata, key):
-                #     if len(metadata.get(key, [])) == 0:
-                #         return 0
-                #     else:
-                #         return metadata[key][-1]
-                # self.logger.log_scalar(
-                #     dir='train', 
-                #     scalar_name='new_indices_ratio (self_attn.q_proj)', 
-                #     scalar=check_if_metadata_exists(block.self_attn.q_proj.metadata, 'new_indices_ratio'),
-                #     step=step
-                # )
-                # self.logger.log_scalar(
-                #     dir='train', 
-                #     scalar_name='new_indices_ratio (self_attn.k_proj)', 
-                #     scalar=check_if_metadata_exists(block.self_attn.k_proj.metadata, 'new_indices_ratio'),
-                #     step=step
-                # )
-                # self.logger.log_scalar(
-                #     dir='train', 
-                #     scalar_name='new_indices_ratio (self_attn.v_proj)', 
-                #     scalar=check_if_metadata_exists(block.self_attn.v_proj.metadata, 'new_indices_ratio'),
-                #     step=step
-                # )
-                # self.logger.log_scalar(
-                #     dir='train', 
-                #     scalar_name='new_indices_ratio (self_attn.o_proj)', 
-                #     scalar=check_if_metadata_exists(block.self_attn.o_proj.metadata, 'new_indices_ratio'),
-                #     step=step
-                # )
-                # self.logger.log_scalar(
-                #     dir='train', 
-                #     scalar_name='new_indices_ratio (mlp.down_proj)', 
-                #     scalar=check_if_metadata_exists(block.mlp.down_proj.metadata, 'new_indices_ratio'),
-                #     step=step
-                # )
-                # self.logger.log_scalar(
-                #     dir='train', 
-                #     scalar_name='new_indices_ratio (mlp.up_proj)', 
-                #     scalar=check_if_metadata_exists(block.mlp.up_proj.metadata, 'new_indices_ratio'),
-                #     step=step
-                # )
-                # self.logger.log_scalar(
-                #     dir='train', 
-                #     scalar_name='new_indices_ratio (mlp.gate_proj)', 
-                #     scalar=check_if_metadata_exists(block.mlp.gate_proj.metadata, 'new_indices_ratio'),
-                #     step=step
-                # )
-        
+                try:
+                    self.log_reassigns(block, step)
+                except:
+                    print('reassigns not logged!')
 
                 # codebook = block.self_attn.q_proj.codebook
                 # print("codebook.grad:", codebook.grad)

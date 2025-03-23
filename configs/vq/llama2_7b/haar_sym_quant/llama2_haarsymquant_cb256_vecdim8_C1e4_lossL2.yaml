@@ -19,7 +19,8 @@ training_params:
 
   optimization_settings:
     n_epochs: 3
-    loss_fn: !L2
+    loss_fn: !LpLoss
+      p: 2
 
     method_params:
       use_latent_weight: False #True

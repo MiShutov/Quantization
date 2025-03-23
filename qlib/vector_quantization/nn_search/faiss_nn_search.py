@@ -29,8 +29,7 @@ def reassign_exact(vectors, codebook, reassine_params=None):
     return indices
 
 
-def reassign_torch(vectors, codebook, reassine_params):
-    batch_size = reassine_params['batch_size']
+def reassign_torch(vectors, codebook, batch_size):
     n_batches = vectors.shape[0] // batch_size
     assert n_batches * batch_size == vectors.shape[0]
     all_cluster_assignments = []
@@ -46,10 +45,12 @@ def reassign_torch(vectors, codebook, reassine_params):
 
 @torch.no_grad()
 def reassign(vectors, codebook, reassine_params={}):
-    if reassine_params.get('batch_size', False):
-        return reassign_torch(vectors, codebook, reassine_params)
-    
-    if reassine_params.get('nlist', False) and reassine_params.get('nprobe', False):
-        return reassign_approx(vectors, codebook, reassine_params)
+    if reassine_params['type']=='torch':
+        return reassign_torch(vectors, codebook, reassine_params['batch_size'])
     else:
-        return reassign_exact(vectors, codebook, reassine_params)
+        raise
+
+    # if reassine_params.get('nlist', False) and reassine_params.get('nprobe', False):
+    #     return reassign_approx(vectors, codebook, reassine_params)
+    # else:
+    #     return reassign_exact(vectors, codebook, reassine_params)
