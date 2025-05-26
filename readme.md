@@ -1,1 +1,1 @@
-This is NN quantization repozitory
+This is NN quantization repository
