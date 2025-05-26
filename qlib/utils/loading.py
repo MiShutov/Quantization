@@ -3,6 +3,7 @@ import nip
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from qlib.modeling.modeling_llama import CustomLlamaForCausalLM
 from datasets import load_dataset
 
 path_to_datasets = '/mnt/ssd_storage/ml/llm/datasets'
@@ -18,6 +19,11 @@ def load_tokenizer(model_name):
 def load_model(model_name, **model_kwargs):
     path_to_pretrained = os.path.join(path_to_pretrained_models, model_name)
     return AutoModelForCausalLM.from_pretrained(path_to_pretrained, **model_kwargs)
+
+
+def load_custom_llama(model_name, **model_kwargs):
+    path_to_pretrained = os.path.join(path_to_pretrained_models, model_name)
+    return CustomLlamaForCausalLM.from_pretrained(path_to_pretrained, **model_kwargs)
 
 
 def load_llama(path_to_pretrained=None, model_name=None, **model_kwargs):

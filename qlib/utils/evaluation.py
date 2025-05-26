@@ -72,7 +72,7 @@ def evaluate(model, dataloader, print_times=10):
         n_processed_samples = n_processed_samples + n_samples
         loss += neg_log_likelihood * n_samples / n_processed_samples
 
-        if step!=0 and step%(n_steps//print_times)==0:
+        if step!=0 and step%(max(1, n_steps//print_times))==0:
             print(math.exp(loss.item()))
 
     ppl = math.exp(loss.item())

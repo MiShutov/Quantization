@@ -1,12 +1,7 @@
-import torch
-import torch.nn as nn
-
-
 class Wrapper:
     def __init__(self, wrap_rule, exceptions={}):
         self.wrap_rule = wrap_rule
         self.exceptions = exceptions
-
 
     def check_exception(self, module_class_name, module_full_name):
         class_exceptions = self.exceptions.get(module_class_name, False)
@@ -15,7 +10,6 @@ class Wrapper:
                 if excepion in module_full_name:
                     return class_exceptions[excepion]
         return False
-
 
     def wrap_model(self, current_module, prefix=''):
         for module_name, module in current_module.named_children():
@@ -27,11 +21,9 @@ class Wrapper:
                 if not exception:
                     new_module = self.wrap_rule[module_class_name].wrap_module(module)
                     setattr(current_module, module_name, new_module)
-                    #print(full_name, 'wrapped!')
                 else:
                     new_module = exception.wrap_module(module)
                     setattr(current_module, module_name, new_module)
-                    #print(full_name, 'wrapped! (exception)')
             else:
                 self.wrap_model(module, full_name)
 
