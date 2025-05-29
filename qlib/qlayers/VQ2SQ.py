@@ -11,41 +11,6 @@ import os
 from qlib.utils.incoherence_preprocessing.incoherence_process_functions import incoherence_process, incoherence_preprocess
 
 
-def create_lowbit_trellis_codebook(base_codebook_size, values_bits, bound):
-    n_unique_values = 1 << values_bits
-    unique_values = torch.arange(n_unique_values) - n_unique_values // 2
-
-    step = 2 * bound / (n_unique_values - 1)
-    offset = step / 2
-
-    unique_values = unique_values * step + offset
-
-    quantiles = torch.special.ndtr(unique_values)
-
-    quantiles_padded = torch.tensor([0] + list(quantiles) + [1])
-
-    quantiles_dif = quantiles_padded[1:] - quantiles_padded[:-1]
-    frequences = (quantiles_dif[:-1] + quantiles_dif[1:]) / 2
-    counts = frequences * base_codebook_size
-
-    codebook = []
-    for i, c in enumerate(counts):
-        codebook += max(c.round().int(), 1) * [unique_values[i]]
-
-    def remove_random_elements(lst, k):
-        if k >= len(lst):
-            return []  # или raise ValueError("k must be less than list length")
-        indices_to_remove = random.sample(range(len(lst)), k)
-        return [x for i, x in enumerate(lst) if i not in indices_to_remove]
-
-    elems_to_remove = len(codebook) - base_codebook_size
-    codebook = remove_random_elements(codebook, elems_to_remove)
-
-    codebook = torch.tensor(codebook)
-
-    return codebook, step, offset
-
-
 def get_positive_lowbit_codebook(base_codebook_size, values_bits, bound):
     sample_values = int(base_codebook_size * 1.5)
     scale = bound / ((2**(values_bits-1)) - 0.5)
@@ -112,29 +77,6 @@ def quantlut_sym_2d(tlut, L, nbits):
     return lut
 
 
-def decode_1mad_short(x):
-    x = x.to(torch.int64)
-    x = x & ((1 << 32) - 1)
-    x = x * 34038481 + 76625530
-    x = x & ((1 << 32) - 1)
-    s = -60
-    for i in range(8):
-        s += ((x >> (4 * i)) & 15)
-    return s * 1.6 / 21.25
-
-
-def decode_1mad_mid(x):
-    x = x.to(torch.int64)
-    x = x & ((1 << 32) - 1)
-    x = x * 34038481 + 76625530
-    x = x & ((1 << 32) - 1)
-    
-    s = -157.5
-    for i in range(5):
-        s += ((x >> (6 * i)) & 63)
-    return s / 41.31
-
-
 class bitshift_codebook(nn.Module):
     def __init__(self,
                  L=16,
@@ -156,46 +98,6 @@ class bitshift_codebook(nn.Module):
             assert V == 1
             self.register_buffer('lut',
                                  decode_1mad(torch.arange(2**L)).unsqueeze(0))
-        elif decode_mode == '1mad_short':
-            assert V == 1
-            self.register_buffer('lut',
-                                 decode_1mad_short(torch.arange(2**L)).unsqueeze(0))
-        elif decode_mode == '1mad_mid':
-            assert V == 1
-            self.register_buffer('lut',
-                                 decode_1mad_mid(torch.arange(2**L)).unsqueeze(0))
-        elif decode_mode == 'smart_lut':
-            assert V == 1
-            
-            nbits = 6
-            cb_size = 2**nbits #512 #4096
-            
-            ### Uniform
-            # step = 4 * 2 / cb_size
-            # offset = cb_size // 2 - 1
-            # smart_cb = step * (torch.arange(cb_size) - offset)
-            
-            ### Random gaussian
-            # smart_cb = torch.randn(256)
-            
-            smart_cb = torch.distributions.Normal(0, 1).icdf(torch.linspace(0, 1, cb_size + 2)[1:-1]) * 1.1
-            #smart_cb = smart_cb[torch.randperm(cb_size)]
-            
-            lut = torch.arange(1 << L)
-            lut = (lut + 1) * lut
-            lut = (lut >> (16 - nbits - 1)) & ((1 << nbits) - 1)
-            smart_lut = smart_cb[lut]
-
-
-            #smart_lut = smart_cb[torch.arange(2**L) % cb_size]
-            #seed=42
-            #torch.manual_seed(seed)
-            #shuffled_indices = torch.randperm(2**L)
-            #smart_lut = smart_lut[shuffled_indices]
-
-
-            self.register_buffer('lut',
-                                 smart_lut.unsqueeze(0))
         
         elif decode_mode == 'quantlut_sym':
             if tlut is None:
@@ -229,31 +131,6 @@ class bitshift_codebook(nn.Module):
                 'lut',
                 quantlut_sym_2d(self.tlut, L, tlut_bits).T.contiguous())
 
-        elif decode_mode == 'lowbit_lut':
-            assert V == 1
-            # best: base_codebook_size=256, values_bits=4, val_bound=3
-            nbits = 8
-            base_codebook_size = 2**nbits
-            values_bits = 4
-            val_bound = 3.0
-            smart_cb, scale, offset = create_lowbit_trellis_codebook(base_codebook_size, values_bits, val_bound)
-            
-            if L==nbits:
-               smart_lut = smart_cb[torch.randperm(base_codebook_size)]
-            else:
-                lut = torch.arange(1 << L)
-                lut = (lut + 1) * lut
-                lut = (lut >> (16 - nbits - 1)) & ((1 << nbits) - 1)
-                smart_lut = smart_cb[lut]
-
-            #smart_lut = smart_cb[torch.arange(2**L) % cb_size]
-            #seed=42
-            #torch.manual_seed(seed)
-            #shuffled_indices = torch.randperm(2**L)
-            #smart_lut = smart_lut[shuffled_indices]
-
-            self.register_buffer('lut',
-                                 smart_lut.unsqueeze(0))
         else:
             raise Exception
 
@@ -273,8 +150,7 @@ class bitshift_codebook(nn.Module):
         self.version = 0
 
     def recons(self, encoded, **kwargs):
-        return self.lut[:,
-                        encoded.int().to(self.lut.device)].to(encoded.device)
+        return self.lut[:, encoded.int().to(self.lut.device)].to(encoded.device)
 
     @torch.compile
     def update(self, cost, thing):
@@ -367,8 +243,7 @@ class bitshift_codebook(nn.Module):
         overlap = state[T // (2 * self.V)] >> self.K * self.V
         state = self.quantize_seq(X, overlap=overlap, batch_size=batch_size)
         hatX = self.recons(state).transpose(0, 1).reshape(X.shape)
-        return hatX.T.contiguous().to(X.device), state.T.contiguous().to(
-            X.device)
+        return hatX.T.contiguous().to(X.device), state.T.contiguous().to(X.device)
 
     def pack_trellis(self, trellis):
         # T is really T // self.V here
@@ -454,7 +329,6 @@ class TrellisLinear(torch.nn.Module):
         self.init_device = init_device
 
         self.codebook = bitshift_codebook(L=L, K=K, V=V, decode_mode=decode_mode, tlut_bits=tlut_bits)
-        self.compressed_weight = torch.empty(1, dtype=torch.int16)
         self.input_quantizer = torch.nn.Identity()
 
 
@@ -487,15 +361,15 @@ class TrellisLinear(torch.nn.Module):
         # Quantize
         w = w.reshape(-1, self.T).to(self.init_device)
         _, states = self.codebook.quantize(w, batch_size=256)
-        self.compressed_weight = self.codebook.pack_trellis(states)
+        self.trellis = self.codebook.pack_trellis(states)
+
         return deepcopy(self).to(orig_device)
 
 
-    def forward(self, x):
-        x = self.input_quantizer(x)
-        w_trellis = self.codebook.unpack_trellis(self.compressed_weight, T=self.T)
-        #w = decode_1mad_mid(w_trellis)
-        w = self.codebook.recons(w_trellis)
+    @property
+    def weight(self):
+        states = self.codebook.unpack_trellis(self.trellis, T=self.T)
+        w = self.codebook.recons(states.T).transpose(0, 1).reshape(-1, states.shape[0]).T
         w = w.reshape(self.w_shape)
 
         if self.incoh_proc_mode == 'qtip':
@@ -504,6 +378,12 @@ class TrellisLinear(torch.nn.Module):
             w = w * self.SU * self.SV
         else:
             raise RuntimeError
+        return w
+
+
+    def forward(self, x):
+        x = self.input_quantizer(x)
+        w = self.weight
 
         return F.linear(weight=w, input=x)
 
