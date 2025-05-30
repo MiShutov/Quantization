@@ -429,6 +429,7 @@ class trellis_quantizer(nn.Module):
                     quantlut_sym(self.tlut, L, tlut_bits).T.contiguous())
 
         elif decode_mode == 'LowBitSym':
+            assert self.V == 2
             assert tlut_bits > 0
             tlut = get_positive_lowbit_codebook(2**tlut_bits, values_bits=4, bound=3.0)[0]
             self.register_buffer('tlut', tlut)
@@ -463,6 +464,7 @@ class trellis_quantizer(nn.Module):
         """Reconstruct values from encoded states"""
         return self.lut[encoded.int().to(self.lut.device)].to(encoded.device)
 
+    @torch.compile
     def update(self, cost, orig_seq_part):
         """
         Viterbi update step
@@ -600,7 +602,15 @@ class trellis_quantizer(nn.Module):
         """Main quantization method"""
         X = X.contiguous().to(torch.float16)
         T = X.shape[-1]
-        roll_X = torch.roll(X, T // (2 * self.V) * self.V, 1)
-        state = self.quantize_seq(roll_X, overlap=None, batch_size=batch_size)
-        hatX = self.recons(state).transpose(0, 1).reshape(X.shape)
+        #roll_X = torch.roll(X, T // (2 * self.V) * self.V, 1)
+        #state = self.quantize_seq(roll_X, overlap=None, batch_size=batch_size)
+        #overlap = state[T // (2 * self.V)] >> self.K * self.V
+
+
+        state = self.quantize_seq(X, overlap=None, batch_size=batch_size)
+        print(state.shape)
+        
+        hatX = self.recons(state).reshape(X.shape)
         return hatX.contiguous().to(X.device), state.contiguous().to(X.device)
+    
+
