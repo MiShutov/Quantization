@@ -1,2 +1,2 @@
 from qlib.modeling.modeling_llama import CustomLlamaForCausalLM
-
+from qlib.modeling.modeling_qtrellis_llama import QuantizedLlamaForCausalLM

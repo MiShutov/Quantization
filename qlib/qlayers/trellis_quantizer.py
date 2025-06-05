@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 import math
-from qlib.qlayers.kernel_decompress import decode_compressed
+from qlib.qlayers.kernel_decompress import decode_compressed #DecodeKernelAG
 
 
 def get_positive_lowbit_codebook(base_codebook_size, values_bits, bound):
@@ -99,6 +99,7 @@ class trellis_quantizer(nn.Module):
             assert self.V == 2
             assert tlut_bits > 0
             tlut, scale = get_positive_lowbit_codebook(2**tlut_bits, values_bits=4, bound=3.0)
+            #self.scales = torch.nn.Parameter(scale, dtype=torch.float32, requires_grad=True)
             self.register_buffer('tlut', tlut)
             self.register_buffer(
                 'lut',
@@ -107,21 +108,14 @@ class trellis_quantizer(nn.Module):
         else:
             raise Exception
 
-        # State transition buffers
-        self.register_buffer('sumdelta', (torch.arange(2**(K * V)) << (L - K * V)).view(1, 1, -1))
-        
-        # State candidates: maps (reduced_state, delta) -> full_state
-        # Shape: (1, 2^(L-K*V), 2^(K*V))
-        self.register_buffer('state_candidates',
-                           (torch.arange(2**L).unsqueeze(0) >> (K * V))[0, ::2**(K * V)].unsqueeze(-1) + self.sumdelta)
-        
+
 
     def recons(self, encoded, **kwargs):
         """Reconstruct values from encoded states"""
         return self.lut[encoded.int().to(self.lut.device)].to(encoded.device)
 
     @torch.compile
-    def update(self, cost, orig_seq_part):
+    def update(self, cost, orig_seq_part, state_candidates):
         B = orig_seq_part.shape[0]  # batch size
         R = 2 ** (self.L - self.K * self.V)  # reduced state size
         D = 2 ** (self.K * self.V)  # delta size
@@ -134,7 +128,7 @@ class trellis_quantizer(nn.Module):
         cost_expanded = cost.view(B, 1, S).expand(-1, R, -1) 
 
         # Prepare candidate indices (B, R, D)
-        candidates = self.state_candidates.expand(B, R, D)
+        candidates = state_candidates.expand(B, R, D)
 
         # Gather candidate costs (B, R, D)
         cand_cost = torch.gather(
@@ -158,8 +152,17 @@ class trellis_quantizer(nn.Module):
 
         return prev_state, cost
 
+
     def viterbi(self, X, overlap=None):
         """Optimized Viterbi decoding with time-major storage"""
+
+        # State transition buffers
+        sumdelta =  (torch.arange(2**(self.K * self.V), device=X.device) << (self.L - self.K * self.V)).view(1, 1, -1)
+      
+        # State candidates: maps (reduced_state, delta) -> full_state
+        # Shape: (1, 2^(L-K*V), 2^(K*V))
+        state_candidates = (torch.arange(2**self.L, device=X.device).unsqueeze(0) >> (self.K * self.V))[0, ::2**(self.K * self.V)].unsqueeze(-1) + sumdelta
+
         B = X.shape[0]
         T_v = self.T // self.V
         fakeinf = torch.tensor(torch.inf)
@@ -180,12 +183,12 @@ class trellis_quantizer(nn.Module):
         
         for i in range(1, T_v):
             obs = X[:, i*self.V:(i+1)*self.V]
-            prev_state, cost = self.update(cost, obs)
+            prev_state, cost = self.update(cost, obs, state_candidates)
             from_state[i] = prev_state
 
         if overlap is not None:
             mask = torch.ones(B, 2**self.L, device=X.device) * fakeinf
-            allow = (overlap.unsqueeze(-1) + self.sumdelta.unsqueeze(0))
+            allow = (overlap.unsqueeze(-1) + sumdelta.unsqueeze(0))
             mask.scatter_(1, allow[0, 0], 0)
             cost = torch.min(cost + mask, fakeinf)
 
@@ -198,6 +201,7 @@ class trellis_quantizer(nn.Module):
             final_state[i-1] = torch.gather(from_state[i], 1, reduced_idx).squeeze(1)
             
         return final_state.transpose(0, 1)  # Return as (B, T_v)
+
 
     def quantize_seq(self, X, overlap=None, **kwargs):
         """Quantize sequence with batch processing"""
@@ -222,17 +226,12 @@ class trellis_quantizer(nn.Module):
         Qidxs = Qidxs.reshape(n_seq_padded, T // self.V)[:n_seq]
         return Qidxs
 
+
     def quantize(self, X, batch_size='auto', **kwargs):
         X_shape = X.shape
         assert self.T == 256
         
         X = X.reshape(-1, self.T)
-        # # Set vector as 16 x 16 patch
-        # patch_size = 16
-        # X = X.unfold(0, patch_size, patch_size).unfold(1, patch_size, patch_size)
-        # X = X.reshape(-1, self.T).contiguous().to(torch.float16)
-        # X = X.contiguous().view(-1, patch_size, patch_size)
-        # X = X.contiguous().view(-1, patch_size * patch_size)
 
         # Fisrt fase
         roll_X = torch.roll(X, self.T // (2 * self.V) * self.V, 1)

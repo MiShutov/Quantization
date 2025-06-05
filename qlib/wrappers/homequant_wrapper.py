@@ -9,17 +9,19 @@ class HomeQuantWrapper:
                 return exception_name
         return False
 
-    def wrap_model(self, current_module, prefix=""):
+    def wrap_model(self, current_module, prefix="", verbose=False):
         for module_name, module in current_module.named_children():
             full_name = f"{prefix}.{module_name}" if prefix else module_name
             if module.__class__ in self.wrap_rule:
                 if self.check_exception(full_name):
                     if self.exceptions[self.check_exception(full_name)] is not None:
+                        print('exception:', full_name)
                         new_module = self.exceptions[self.check_exception(full_name)].wrap_module(module, full_name)
                         setattr(current_module, module_name, new_module)
                 else:
                     if self.wrap_rule[module.__class__] is not None:
+                        print('wrap:', full_name)
                         new_module = self.wrap_rule[module.__class__].wrap_module(module, full_name)
                         setattr(current_module, module_name, new_module)
             else:
-                self.wrap_model(module, full_name)
+                self.wrap_model(module, full_name, verbose=verbose)

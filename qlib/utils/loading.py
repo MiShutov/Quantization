@@ -3,42 +3,36 @@ import nip
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from qlib.modeling.modeling_llama import CustomLlamaForCausalLM
 from datasets import load_dataset
 
-path_to_datasets = '/mnt/ssd_storage/ml/llm/datasets'
-cache_dir = "/mnt/ssd_storage/ml/llm/datasets/huggingface_cache"
-path_to_pretrained_models = '/mnt/ssd_storage/ml/llm/pretrained_models'
+PATH_TO_DATASETS = '/mnt/ssd_storage/ml/llm/datasets'
+CACHE_DIR = "/mnt/ssd_storage/ml/llm/datasets/huggingface_cache"
+PATH_TO_PRETRAINED_MODELS = '/mnt/ssd_storage/ml/llm/pretrained_models'
 
 
 def load_tokenizer(model_name):
-    path_to_pretrained = os.path.join(path_to_pretrained_models, model_name)
+    path_to_pretrained = os.path.join(PATH_TO_PRETRAINED_MODELS, model_name)
     return AutoTokenizer.from_pretrained(path_to_pretrained)
 
 
 def load_model(model_name, **model_kwargs):
-    path_to_pretrained = os.path.join(path_to_pretrained_models, model_name)
+    path_to_pretrained = os.path.join(PATH_TO_PRETRAINED_MODELS, model_name)
     return AutoModelForCausalLM.from_pretrained(path_to_pretrained, **model_kwargs)
-
-
-def load_custom_llama(model_name, **model_kwargs):
-    path_to_pretrained = os.path.join(path_to_pretrained_models, model_name)
-    return CustomLlamaForCausalLM.from_pretrained(path_to_pretrained, **model_kwargs)
 
 
 def load_llama(path_to_pretrained=None, model_name=None, **model_kwargs):
     if (path_to_pretrained is not None) and (model_name is not None):
         raise RuntimeError(f'Specify path_to_pretrained or model_name')
     if model_name is not None:
-        path_to_pretrained = os.path.join(path_to_pretrained_models, model_name)
+        path_to_pretrained = os.path.join(PATH_TO_PRETRAINED_MODELS, model_name)
     tokenizer = AutoTokenizer.from_pretrained(path_to_pretrained)
     model = AutoModelForCausalLM.from_pretrained(path_to_pretrained, **model_kwargs)
     return model, tokenizer
 
 
 def get_data(dataset_name, split, tokenizer):
-    path_to_dataset = os.path.join(path_to_datasets, dataset_name)
-    test = load_dataset(path_to_dataset, split=split, cache_dir=cache_dir)
+    path_to_dataset = os.path.join(PATH_TO_DATASETS, dataset_name)
+    test = load_dataset(path_to_dataset, split=split, cache_dir=CACHE_DIR)
     ids = tokenizer("\n\n".join(test["text"]), return_tensors="pt").input_ids
     return ids
 

@@ -64,6 +64,7 @@ def decode_compressed(L, K, V, m, n, compressed, expanded_lut):
         compressed = compressed.view(torch.uint16)
 
     BITS_PER_BLOCK = K * 16 * 16  # K bits * f16 mma tile A size
+    
     assert compressed.shape[0] == K * m * n // 16
     
     # Skip unswizzling - use natural block order
@@ -91,3 +92,22 @@ def decode_compressed(L, K, V, m, n, compressed, expanded_lut):
     # Deswizzle to 16x16 blocks
     decompressed = mma_swizzled.reshape(m // 16, n // 16, 16, 16)
     return decompressed.reshape(m, n)
+
+
+# class DecodeKernelAG(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, L, K, V, m, n, compressed, lut):
+#         ctx.save_for_backward(compressed, lut)
+#         ctx.L = L
+#         ctx.K = K
+#         ctx.V = V
+#         ctx.m = m
+#         ctx.n = n
+
+#         hatW = decode_compressed(L, K, V, m, n, compressed, lut)
+#         return hatW
+
+#     @staticmethod
+#     def backward(ctx, grad_output):
+#         # Not sure what the gradient of hatW should be used for; returning None for all
+#         return (None,) * 7
