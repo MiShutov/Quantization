@@ -136,10 +136,10 @@ class HomequantTrainerPTQ():
                 grad_scaler = optimizers['grad_scaler']
                 grad_scaler.scale(loss).backward()
 
-                try:
-                    self.log_reassigns(block, step)
-                except:
-                    print('reassigns not logged!')
+                # try:
+                #     self.log_reassigns(block, step)
+                # except:
+                #     print('reassigns not logged!')
 
                 # codebook = block.self_attn.q_proj.codebook
                 # print("codebook.grad:", codebook.grad)
@@ -221,7 +221,7 @@ class HomequantTrainerPTQ():
         block = torch.load(path_to_fp_block, map_location=self.device_map)
         self.collect_block_activations(block, self.activation_storage.train_fp, with_input_preparation)
         self.collect_block_activations(block, self.activation_storage.val_fp, with_input_preparation)
-        
+
         #q
         block = torch.load(path_to_q_block, map_location=self.device_map)
         if train:

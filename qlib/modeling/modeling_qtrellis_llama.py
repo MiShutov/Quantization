@@ -177,9 +177,34 @@ class LlamaMLP(nn.Module):
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_proj = TrellisLinear(weight_shape=[self.intermediate_size, self.hidden_size])
-        self.up_proj = TrellisLinear(weight_shape=[self.intermediate_size, self.hidden_size])
-        self.down_proj = TrellisLinear(weight_shape=[self.hidden_size, self.intermediate_size])
+        tlp = config.trellis_linear_params
+        self.gate_proj = TrellisLinear(weight_shape=[self.intermediate_size, self.hidden_size],
+                                       T=tlp["T"],
+                                       L=tlp["L"],
+                                       V=tlp["V"],
+                                       K=tlp["K"],
+                                       decode_mode=tlp["decode_mode"],
+                                       tlut_bits=tlp["tlut_bits"],
+                                       incoh_proc_mode=tlp["incoh_proc_mode"],
+                                       init_device=tlp["init_device"])
+        self.up_proj = TrellisLinear(weight_shape=[self.intermediate_size, self.hidden_size],
+                                       T=tlp["T"],
+                                       L=tlp["L"],
+                                       V=tlp["V"],
+                                       K=tlp["K"],
+                                       decode_mode=tlp["decode_mode"],
+                                       tlut_bits=tlp["tlut_bits"],
+                                       incoh_proc_mode=tlp["incoh_proc_mode"],
+                                       init_device=tlp["init_device"])
+        self.down_proj = TrellisLinear(weight_shape=[self.hidden_size, self.intermediate_size],
+                                       T=tlp["T"],
+                                       L=tlp["L"],
+                                       V=tlp["V"],
+                                       K=tlp["K"],
+                                       decode_mode=tlp["decode_mode"],
+                                       tlut_bits=tlp["tlut_bits"],
+                                       incoh_proc_mode=tlp["incoh_proc_mode"],
+                                       init_device=tlp["init_device"])
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
@@ -237,11 +262,43 @@ class LlamaAttention(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
         self.is_causal = True
-
-        self.q_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size])
-        self.k_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size])
-        self.v_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size])
-        self.o_proj = TrellisLinear(weight_shape=[config.hidden_size, config.num_attention_heads * self.head_dim])
+        tlp = config.trellis_linear_params
+        self.q_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
+                                       T=tlp["T"],
+                                       L=tlp["L"],
+                                       V=tlp["V"],
+                                       K=tlp["K"],
+                                       decode_mode=tlp["decode_mode"],
+                                       tlut_bits=tlp["tlut_bits"],
+                                       incoh_proc_mode=tlp["incoh_proc_mode"],
+                                       init_device=tlp["init_device"])
+        self.k_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
+                                       T=tlp["T"],
+                                       L=tlp["L"],
+                                       V=tlp["V"],
+                                       K=tlp["K"],
+                                       decode_mode=tlp["decode_mode"],
+                                       tlut_bits=tlp["tlut_bits"],
+                                       incoh_proc_mode=tlp["incoh_proc_mode"],
+                                       init_device=tlp["init_device"])
+        self.v_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
+                                       T=tlp["T"],
+                                       L=tlp["L"],
+                                       V=tlp["V"],
+                                       K=tlp["K"],
+                                       decode_mode=tlp["decode_mode"],
+                                       tlut_bits=tlp["tlut_bits"],
+                                       incoh_proc_mode=tlp["incoh_proc_mode"],
+                                       init_device=tlp["init_device"])
+        self.o_proj = TrellisLinear(weight_shape=[config.hidden_size, config.num_attention_heads * self.head_dim],
+                                       T=tlp["T"],
+                                       L=tlp["L"],
+                                       V=tlp["V"],
+                                       K=tlp["K"],
+                                       decode_mode=tlp["decode_mode"],
+                                       tlut_bits=tlp["tlut_bits"],
+                                       incoh_proc_mode=tlp["incoh_proc_mode"],
+                                       init_device=tlp["init_device"])
 
     def forward(
         self,

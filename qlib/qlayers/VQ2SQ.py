@@ -42,9 +42,17 @@ class TrellisLinear(torch.nn.Module):
         self.SU = torch.nn.Parameter(torch.empty(self.weight_shape[1], dtype=torch.float16), requires_grad=True)
         self.SV = torch.nn.Parameter(torch.empty(self.weight_shape[0], dtype=torch.float16), requires_grad=True)
         
+        self.scales = torch.nn.Parameter(
+            torch.ones(
+                (self.weight_shape[0] * self.weight_shape[1] // 256, 1), 
+                dtype=torch.float16
+            ),
+            requires_grad=True
+        )
+        
         trellis_shape = (
             self.weight_shape[0] * self.weight_shape[1] // self.weight_quantizer.T, 
-            self.weight_quantizer.T // self.weight_quantizer.L * self.weight_quantizer.K
+            self.weight_quantizer.T // 16 * self.weight_quantizer.K
         )
         self.trellis = torch.nn.Parameter(torch.empty(trellis_shape, dtype=torch.uint16), requires_grad=False)
         # TODO bias
@@ -75,12 +83,14 @@ class TrellisLinear(torch.nn.Module):
         self.SV *= torch.sqrt(w_std)
 
         # Quantize
+        if verbose and kwargs.get('module_name', False):
+            print(kwargs['module_name'])
         reco, states = self.weight_quantizer.quantize(w)
         if verbose:
             err = torch.mean((reco - w)**2)
             print(f"error (w-wq)^2: {err.mean():.3f}")
 
-        self.trellis = self.weight_quantizer.pack_trellis(states)
+        self.trellis.data = self.weight_quantizer.pack_trellis(states)
         
         return deepcopy(self).to(orig_device)
 
@@ -88,13 +98,10 @@ class TrellisLinear(torch.nn.Module):
     @property
     def weight(self):
         if self.weight_quantizer.L == 16:
-            if hasattr(self, 'w_shape'):
-                w = self.weight_quantizer.reconstruct_weight_fast(self.trellis, self.w_shape)
-            else:
-                w = self.weight_quantizer.reconstruct_weight_fast(self.trellis, self.weight_shape)
+            w = self.weight_quantizer.reconstruct_weight_fast(self.trellis, self.weight_shape)
         else:
             w = self.weight_quantizer.reconstruct_weight(self.trellis, self.weight_shape)
-
+        
         if self.incoh_proc_mode == 'qtip':
             w = incoherence_process(w.float(), self.SU, self.SV)
         elif self.incoh_proc_mode == 'skip':
@@ -108,5 +115,9 @@ class TrellisLinear(torch.nn.Module):
         x = self.input_quantizer(x)
         w = self.weight
         
+        w = w.reshape(-1, 256)
+        w = w * self.scales
+        w = w.reshape(self.weight_shape)
+
         return F.linear(weight=w, input=x)
 

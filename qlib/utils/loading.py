@@ -86,3 +86,25 @@ class QATDataset(Dataset):
 
     def get_dataloader(self):
         return DataLoader(self, batch_size=self.batch_size)
+
+
+class KnowledgeDistillationDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+        #self.lm_head = lm_head.cpu() #.to(DEVICE)
+        self.len = len(self.data['decoder_output'])
+        self.rand_indices = torch.randperm(self.len)
+        
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, index):
+        assert index < self.len
+        input_ids = self.data['input'][self.rand_indices[index]]
+        decoder_output = self.data['decoder_output'][self.rand_indices[index]]
+        return {
+            'input_ids' : input_ids[0],
+            'decoder_output' : decoder_output[0]
+        }
+    
