@@ -7,8 +7,8 @@ lm_eval \
     --tasks piqa,winogrande,arc_easy,arc_challenge \
     --device cuda:0 \
     --batch_size 100 \
-	--trust_remote_code\ 
+	--trust_remote_code 
 
-# ~17min
+# ~14min
 
 # --log_samples  logging model responses 

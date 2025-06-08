@@ -1,40 +1,57 @@
-import math
-from functools import cache
-import random 
-from tqdm import tqdm
+from enum import Enum
 from copy import deepcopy
 import torch
 from torch import nn
 import torch.nn.functional as F
-import os
-torch.manual_seed(0)
 
-from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (incoherence_process,  
-                                                                                incoherence_preprocess,
-                                                                                matmul_hadUt_cuda,
-                                                                                matmul_hadU_cuda)
+from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (
+    incoherence_process, incoherence_preprocess, matmul_hadUt_cuda, matmul_hadU_cuda)
 from qlib.qlayers.trellis_quantizer import trellis_quantizer
+
+
+class InputQuantMode(Enum):
+    PER_CHANNEL = 1
+    PER_TENSOR = 2
 
 
 class InputQuantizer(torch.nn.Module):
     def __init__(self,
+                 in_channels,
+                 mode=InputQuantMode.PER_CHANNEL,
                  bit_width=8):
         super().__init__()
-        self.act_scale = nn.Parameter(torch.tensor(0.0))
+        self.in_channels = in_channels
+        self.mode = mode
+        if mode==InputQuantMode.PER_TENSOR:
+            self.act_scale = nn.Parameter(torch.tensor(0.0))
+        elif mode==InputQuantMode.PER_CHANNEL:
+            self.act_scale = nn.Parameter(torch.zeros(in_channels))
         self.bit_width = bit_width
         self.N = - 2 ** (bit_width - 1) 
         self.P = 2 ** (bit_width - 1) - 1 
 
     def forward(self, x):
-        # x_scale_max = torch.max(x.min() / self.N, x.max() / self.P)
-        # if x_scale_max > self.act_scale.data:
-        #     self.act_scale.data = x_scale_max * 1.1
-        
+        # if self.mode==InputQuantMode.PER_TENSOR:
+        #     x_scale = torch.max(x.min() / self.N, x.max() / self.P)
+        #     if x_scale > self.act_scale.data:
+        #         self.act_scale.data = x_scale * 1.1
+        # elif self.mode==InputQuantMode.PER_CHANNEL:
+        #     reduce_dims = tuple(range(x.dim() - 1))
+        #     x_scale = torch.maximum(
+        #         x.amin(dim=reduce_dims) / self.N, 
+        #         x.amax(dim=reduce_dims) / self.P, 
+        #     )
+        #     replace_indices = self.act_scale.data < x_scale
+        #     self.act_scale.data[replace_indices] = 1.1 * x_scale[replace_indices]
+        # return x
+
         x_scaled = x / self.act_scale
         x_clamped = torch.clamp(x_scaled, self.N, self.P)
         x_q = (x_clamped.round_() - x_clamped).detach() + x_clamped
         x_q = x_q * self.act_scale
         return x_q
+        
+        # return x
 
 
 class TrellisLinear(torch.nn.Module):
@@ -63,7 +80,7 @@ class TrellisLinear(torch.nn.Module):
             viterby_bs=viterby_bs
         )
         self.input_quantizer = torch.nn.Identity()
-        #self.input_quantizer = InputQuantizer(bit_width=8)
+        #self.input_quantizer = InputQuantizer(bit_width=8, in_channels=weight_shape[1])
         self.SU = torch.nn.Parameter(torch.empty(self.weight_shape[1], dtype=torch.float16), requires_grad=True)
         self.SV = torch.nn.Parameter(torch.empty(self.weight_shape[0], dtype=torch.float16), requires_grad=True)
         

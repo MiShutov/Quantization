@@ -74,9 +74,9 @@ def quantlut_sym_2d(tlut, L, nbits):
     return lut
 
 
-fname = f'/home/msst/repo/Quantization/ml/weights/LowBitSym_v4_l10.pt'
-_LOW_BIT_LUT_CACHED = torch.load(fname, weights_only=True).to(torch.float16).cuda().contiguous()
-_EXPANDED_LUT_CACHED = quantlut_sym_2d(_LOW_BIT_LUT_CACHED, 16, 10).to(torch.float16).cuda().contiguous()
+# fname = f'/home/msst/repo/Quantization/ml/weights/LowBitSym_v4_l10.pt'
+# _LOW_BIT_LUT_CACHED = torch.load(fname, weights_only=True).to(torch.float16).cuda().contiguous()
+# _EXPANDED_LUT_CACHED = quantlut_sym_2d(_LOW_BIT_LUT_CACHED, 16, 10).to(torch.float16).cuda().contiguous()
 
 
 class trellis_quantizer(nn.Module):
