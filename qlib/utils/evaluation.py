@@ -56,11 +56,14 @@ def get_quantized_model(wrapped_model, fp_model):
     return fp_model
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def evaluate(model, dataloader, print_times=10):
     n_steps = len(dataloader)
     model.eval()
     
+    model.config.output_attentions = False
+    model.config.output_hidden_states = False
+
     loss = 0
     n_processed_samples = 0
     for step, batch in enumerate(tqdm(dataloader)):

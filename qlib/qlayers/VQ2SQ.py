@@ -9,8 +9,32 @@ import torch.nn.functional as F
 import os
 torch.manual_seed(0)
 
-from qlib.utils.incoherence_preprocessing.incoherence_process_functions import incoherence_process, incoherence_preprocess
+from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (incoherence_process,  
+                                                                                incoherence_preprocess,
+                                                                                matmul_hadUt_cuda,
+                                                                                matmul_hadU_cuda)
 from qlib.qlayers.trellis_quantizer import trellis_quantizer
+
+
+class InputQuantizer(torch.nn.Module):
+    def __init__(self,
+                 bit_width=8):
+        super().__init__()
+        self.act_scale = nn.Parameter(torch.tensor(0.0))
+        self.bit_width = bit_width
+        self.N = - 2 ** (bit_width - 1) 
+        self.P = 2 ** (bit_width - 1) - 1 
+
+    def forward(self, x):
+        # x_scale_max = torch.max(x.min() / self.N, x.max() / self.P)
+        # if x_scale_max > self.act_scale.data:
+        #     self.act_scale.data = x_scale_max * 1.1
+        
+        x_scaled = x / self.act_scale
+        x_clamped = torch.clamp(x_scaled, self.N, self.P)
+        x_q = (x_clamped.round_() - x_clamped).detach() + x_clamped
+        x_q = x_q * self.act_scale
+        return x_q
 
 
 class TrellisLinear(torch.nn.Module):
@@ -39,12 +63,14 @@ class TrellisLinear(torch.nn.Module):
             viterby_bs=viterby_bs
         )
         self.input_quantizer = torch.nn.Identity()
+        #self.input_quantizer = InputQuantizer(bit_width=8)
         self.SU = torch.nn.Parameter(torch.empty(self.weight_shape[1], dtype=torch.float16), requires_grad=True)
         self.SV = torch.nn.Parameter(torch.empty(self.weight_shape[0], dtype=torch.float16), requires_grad=True)
         
         self.scales = torch.nn.Parameter(
             torch.ones(
                 (self.weight_shape[0] * self.weight_shape[1] // 256, 1), 
+                #(self.weight_shape[0] * self.weight_shape[1] // 128, 1), 
                 dtype=torch.float16
             ),
             requires_grad=True
@@ -95,6 +121,34 @@ class TrellisLinear(torch.nn.Module):
         return deepcopy(self).to(orig_device)
 
 
+    @torch.no_grad()
+    def update_indices(self, w_shifted):
+        reassine_frac = self.reassine_params["reassine_frac"]
+        vector_dim = self.weight_quantizer.T
+        
+        # Which vectors to reassign
+        n_vectors_to_reassign = int(torch.numel(w_shifted) // vector_dim * reassine_frac)
+        vector_ids_to_reassign = torch.topk(
+            torch.max((
+                    torch.abs(self.latent_weight) / (torch.abs(w_shifted) + 1e-10)
+            ).reshape(-1, vector_dim), dim=1).values,
+            n_vectors_to_reassign
+        ).indices.to(torch.int)
+
+        # # Get vectors to reassign
+        vectors = w_shifted.reshape(-1, vector_dim)[vector_ids_to_reassign]
+
+        # # Compute reassigns
+        _, states = self.weight_quantizer.quantize(vectors)
+        trellis = self.weight_quantizer.pack_trellis(states)
+        
+        # # Set new indices
+        self_trellis_dtype = self.trellis.data.dtype
+        self.trellis.data = self.trellis.data.to(torch.int)
+        self.trellis.data[vector_ids_to_reassign] = trellis.to(torch.int)
+        self.trellis.data = self.trellis.data.to(self_trellis_dtype)
+        
+
     @property
     def weight(self):
         if self.weight_quantizer.L == 16:
@@ -102,22 +156,78 @@ class TrellisLinear(torch.nn.Module):
         else:
             w = self.weight_quantizer.reconstruct_weight(self.trellis, self.weight_shape)
         
+
+        if hasattr(self, 'latent_weight') and (self.trainable==True):
+            self.step_counter += 1
+            w_shifted = (w + self.latent_weight).detach()
+            if self.step_counter % self.reassine_params.get("reassine_step", 1) == 0:
+                self.update_indices(
+                    w_shifted
+                )
+            w = w_shifted - self.latent_weight
+
         if self.incoh_proc_mode == 'qtip':
-            w = incoherence_process(w.float(), self.SU, self.SV)
+            #w = incoherence_process(w.float(), self.SU, self.SV).to(w.dtype)
+            #w = (matmul_hadU_cuda(w.T.float()) * self.SV).to(w.dtype).T
+            w = (matmul_hadU_cuda(w.T) * self.SV).T
         elif self.incoh_proc_mode == 'skip':
             w = w * self.SU * self.SV
         else:
             raise RuntimeError
-        return w
-
-
-    def forward(self, x):
-        x = self.input_quantizer(x)
-        w = self.weight
         
         w = w.reshape(-1, 256)
         w = w * self.scales
         w = w.reshape(self.weight_shape)
+        return w
+
+
+    def forward(self, x):
+        if self.incoh_proc_mode == 'qtip':
+            #x = matmul_hadUt_cuda((x * self.SU).float()).to(x.dtype)
+            x = matmul_hadUt_cuda(x * self.SU)
+        x = self.input_quantizer(x)
+        w = self.weight
 
         return F.linear(weight=w, input=x)
 
+
+##### INCOHERENCE PROCESSING FOR ACTIVATIONS #####
+
+# from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (incoherence_process, 
+#                                                                                 icoherence_process_left,
+#                                                                                 icoherence_process_right,
+# 																				incoherence_process_, 
+# 																				incoherence_preprocess,
+# 																				matmul_hadU_cuda,
+# 																				matmul_hadUt_cuda)
+# import torch.nn.functional as F
+
+# w = torch.randn(11008, 4096).cuda()
+# x = torch.randn(4, 4096, 4096).cuda()
+# res = F.linear(weight=w, input=x)
+
+
+# Wr, SU, SV = incoherence_preprocess(w)
+# SU = SU.to(Wr.device)
+# SV = SV.to(Wr.device)
+
+# res1 = x @ incoherence_process(Wr, SU, SV).T
+# assert torch.allclose(res, res1, atol=1e-3)
+
+# res2 = x @ incoherence_process_(Wr, SU, SV).T
+# assert torch.allclose(res, res2, atol=1e-3)
+
+# res3 = x @ icoherence_process_left(icoherence_process_right(Wr, SU), SV).T
+# assert torch.allclose(res, res3, atol=1e-3)
+
+# res4 = x @ icoherence_process_left(matmul_hadU_cuda(Wr) * SU, SV).T
+# assert torch.allclose(res, res4, atol=1e-3)
+
+# res5 = x @ (matmul_hadU_cuda( (matmul_hadU_cuda(Wr) * SU).T) * SV.unsqueeze(0))
+# assert torch.allclose(res, res5, atol=1e-3)
+
+# res6 = (matmul_hadUt_cuda(x * SU)) @ (matmul_hadU_cuda(Wr.T) * SV)
+# assert torch.allclose(res, res6, atol=1e-3)
+
+# res7 = F.linear(weight=(matmul_hadU_cuda(Wr.T) * SV).T, input=matmul_hadUt_cuda(x * SU))
+# assert torch.allclose(res, res7, atol=1e-3)

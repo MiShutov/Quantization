@@ -1,5 +1,5 @@
 dataset_name: wiki
 split: test[:1000]
 seq_length: 4096
-batch_size: 1
+batch_size: 3
 random_seed: 'no_rand'

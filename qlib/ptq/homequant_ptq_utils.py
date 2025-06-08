@@ -29,7 +29,9 @@ def prepare_block_for_training(
             # reassigns
             if reassine_params is not None:
                 module.reassine_params = reassine_params
-                module.latent_weight = torch.nn.Parameter(fp_block.get_submodule(module_name).weight.clone().to(torch.float32))
+                #module.latent_weight = torch.nn.Parameter(fp_block.get_submodule(module_name).weight.clone().to(torch.float32))
+                module.latent_weight = torch.nn.Parameter(torch.zeros(module.weight_shape).to(fp_block.get_submodule(module_name).weight.device))
+                module.step_counter = 0
                 if hasattr(module, 'signs'): # for SymHQLinear
                     del module.signs
 
@@ -55,7 +57,8 @@ def prepare_block_for_inference(block: torch.nn.Module, quant_classes: list):
                 packed_signs, _ = pack_bool_tensor((1+torch.sign(module.latent_weight)).bool())
                 module.register_buffer('signs', packed_signs)
                 del module.latent_weight
-                del module.reassine_params                
+                del module.reassine_params    
+                del module.step_counter                
         module.trainable = False
 
 @torch.no_grad()

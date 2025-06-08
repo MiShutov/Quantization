@@ -1,4 +1,4 @@
-logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_128seq
+logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_128seq_bs2_ne2
 model_name: Llama2-7b-hf
 fp_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_fp
 q_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_q/T256_L16_V2_K2_cbs10_LowBitSym_qtip

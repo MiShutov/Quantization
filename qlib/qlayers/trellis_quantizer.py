@@ -5,11 +5,6 @@ from tqdm import tqdm
 import math
 from qlib.qlayers.kernel_decompress import decode_compressed #DecodeKernelAG
 
-
-fname = f'/home/msst/repo/Quantization/ml/weights/LowBitSym_v4_l10.pt'
-_LOW_BIT_LUT_CACHED = torch.load(fname, weights_only=True).contiguous()
-
-
 def get_positive_lowbit_codebook(base_codebook_size, values_bits, bound):
     """Generate a symmetric low-bit codebook"""
     sample_values = int(base_codebook_size * 1.5)
@@ -77,6 +72,11 @@ def quantlut_sym_2d(tlut, L, nbits):
         lut = (lut >> (16 - nbits - 1)) & ((1 << nbits) - 1)
     lut = tlut[lut] * torch.stack([sflp0, sflp1]).T
     return lut
+
+
+fname = f'/home/msst/repo/Quantization/ml/weights/LowBitSym_v4_l10.pt'
+_LOW_BIT_LUT_CACHED = torch.load(fname, weights_only=True).to(torch.float16).cuda().contiguous()
+_EXPANDED_LUT_CACHED = quantlut_sym_2d(_LOW_BIT_LUT_CACHED, 16, 10).to(torch.float16).cuda().contiguous()
 
 
 class trellis_quantizer(nn.Module):
@@ -386,5 +386,5 @@ class trellis_quantizer(nn.Module):
             m=w_shape[0],
             n=w_shape[1],
             compressed=packed_trellis.view(-1),
-            expanded_lut=self.lut #quantlut_sym_2d(_LOW_BIT_LUT_CACHED, self.L, self.tlut_bits).contiguous()
+            expanded_lut=self.lut 
         )

@@ -94,6 +94,7 @@ class HomequantTrainerPTQ():
             block,
             path_to_fp_block=None,
         ):
+        # Add latent weigh and other features
         prepare_block_for_training(
             block,
             self.quant_classes,
@@ -107,11 +108,11 @@ class HomequantTrainerPTQ():
             self.optimization_config['optimizers'], block
         )
 
-        # init validations
+        # Init validations
         if self.validation_settings.get('val_before_trainig', False):
             self.validation(block=block, step=0)
 
-        # setup intermediate validation
+        # Setup intermediate validation
         if self.validation_settings.get('n_intermediate_val', 0):
             val_step = n_epochs * self.activation_storage.n_train_batches//(self.validation_settings['n_intermediate_val'])
             val_step = max(1, val_step)
@@ -140,25 +141,24 @@ class HomequantTrainerPTQ():
                 #     self.log_reassigns(block, step)
                 # except:
                 #     print('reassigns not logged!')
-
                 # codebook = block.self_attn.q_proj.codebook
                 # print("codebook.grad:", codebook.grad)
-
                 #latent_weight = block.self_attn.q_proj.latent_weight
                 #print("latent_weight.grad:", latent_weight.grad)
 
-                # optimization step
+                # Optimization step
                 optimization_step(
                     optimizers=optimizers, 
                     step=step, 
                     training_settings=self.training_settings
                 )
 
-                # intermediate validation
+                # Intermediate validation
                 if self.validation_settings.get('n_intermediate_val', 0):
                     if (step) and ((step+1)%val_step==0):
                         self.validation(block=block, step=step)
         
+        # Remove latent weigh and other features
         prepare_block_for_inference(block, self.quant_classes)             
         free_unused_memory()
 
@@ -215,6 +215,7 @@ class HomequantTrainerPTQ():
             path_to_q_block_trained,
             train=False,
             with_input_preparation=False,
+            use_fp_act_only=False,
             ):
 
         #fp
@@ -226,6 +227,9 @@ class HomequantTrainerPTQ():
         block = torch.load(path_to_q_block, map_location=self.device_map)
         if train:
             self.train_block(block, path_to_fp_block)
+        torch.save(block, path_to_q_block_trained)
+
+        if use_fp_act_only:
+            block = torch.load(path_to_fp_block, map_location=self.device_map)
         self.collect_block_activations(block, self.activation_storage.train_q, with_input_preparation)
         self.collect_block_activations(block, self.activation_storage.val_q, with_input_preparation)
-        torch.save(block, path_to_q_block_trained)
