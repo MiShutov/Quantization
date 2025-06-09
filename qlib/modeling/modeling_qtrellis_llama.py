@@ -48,7 +48,8 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
-from qlib.qlayers.VQ2SQ import TrellisLinear
+from qlib import TrellisLinear, TrellisQuantizerParams, InputQuantizerParams
+
 
 logger = logging.get_logger(__name__)
 
@@ -178,33 +179,39 @@ class LlamaMLP(nn.Module):
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
         tlp = config.trellis_linear_params
-        self.gate_proj = TrellisLinear(weight_shape=[self.intermediate_size, self.hidden_size],
-                                       T=tlp["T"],
-                                       L=tlp["L"],
-                                       V=tlp["V"],
-                                       K=tlp["K"],
-                                       decode_mode=tlp["decode_mode"],
-                                       tlut_bits=tlp["tlut_bits"],
-                                       incoh_proc_mode=tlp["incoh_proc_mode"],
-                                       init_device=tlp["init_device"])
-        self.up_proj = TrellisLinear(weight_shape=[self.intermediate_size, self.hidden_size],
-                                       T=tlp["T"],
-                                       L=tlp["L"],
-                                       V=tlp["V"],
-                                       K=tlp["K"],
-                                       decode_mode=tlp["decode_mode"],
-                                       tlut_bits=tlp["tlut_bits"],
-                                       incoh_proc_mode=tlp["incoh_proc_mode"],
-                                       init_device=tlp["init_device"])
-        self.down_proj = TrellisLinear(weight_shape=[self.hidden_size, self.intermediate_size],
-                                       T=tlp["T"],
-                                       L=tlp["L"],
-                                       V=tlp["V"],
-                                       K=tlp["K"],
-                                       decode_mode=tlp["decode_mode"],
-                                       tlut_bits=tlp["tlut_bits"],
-                                       incoh_proc_mode=tlp["incoh_proc_mode"],
-                                       init_device=tlp["init_device"])
+        self.gate_proj = TrellisLinear(
+            weight_shape=[self.intermediate_size, self.hidden_size],
+            weight_scales_group_size=tlp["weight_scales_group_size"],
+            incoh_proc_mode=tlp["incoh_proc_mode"],
+            init_device=tlp["init_device"],
+            weight_quantizer_params=TrellisQuantizerParams(
+                **tlp["weight_quantizer_params"]
+            ),
+            input_quantizer_params=None if tlp.get("input_quantizer_params", None) is None \
+                else InputQuantizerParams(**tlp["input_quantizer_params"])
+        )
+        self.up_proj = TrellisLinear(
+            weight_shape=[self.intermediate_size, self.hidden_size],
+            weight_scales_group_size=tlp["weight_scales_group_size"],
+            incoh_proc_mode=tlp["incoh_proc_mode"],
+            init_device=tlp["init_device"],
+            weight_quantizer_params=TrellisQuantizerParams(
+                **tlp["weight_quantizer_params"]
+            ),
+            input_quantizer_params=None if tlp.get("input_quantizer_params", None) is None \
+                else InputQuantizerParams(**tlp["input_quantizer_params"])
+        )
+        self.down_proj = TrellisLinear(
+            weight_shape=[self.hidden_size, self.intermediate_size],
+            weight_scales_group_size=tlp["weight_scales_group_size"],
+            incoh_proc_mode=tlp["incoh_proc_mode"],
+            init_device=tlp["init_device"],
+            weight_quantizer_params=TrellisQuantizerParams(
+                **tlp["weight_quantizer_params"]
+            ),
+            input_quantizer_params=None if tlp.get("input_quantizer_params", None) is None \
+                else InputQuantizerParams(**tlp["input_quantizer_params"])
+        )
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
@@ -263,42 +270,50 @@ class LlamaAttention(nn.Module):
         self.attention_dropout = config.attention_dropout
         self.is_causal = True
         tlp = config.trellis_linear_params
-        self.q_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
-                                       T=tlp["T"],
-                                       L=tlp["L"],
-                                       V=tlp["V"],
-                                       K=tlp["K"],
-                                       decode_mode=tlp["decode_mode"],
-                                       tlut_bits=tlp["tlut_bits"],
-                                       incoh_proc_mode=tlp["incoh_proc_mode"],
-                                       init_device=tlp["init_device"])
-        self.k_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
-                                       T=tlp["T"],
-                                       L=tlp["L"],
-                                       V=tlp["V"],
-                                       K=tlp["K"],
-                                       decode_mode=tlp["decode_mode"],
-                                       tlut_bits=tlp["tlut_bits"],
-                                       incoh_proc_mode=tlp["incoh_proc_mode"],
-                                       init_device=tlp["init_device"])
-        self.v_proj = TrellisLinear(weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
-                                       T=tlp["T"],
-                                       L=tlp["L"],
-                                       V=tlp["V"],
-                                       K=tlp["K"],
-                                       decode_mode=tlp["decode_mode"],
-                                       tlut_bits=tlp["tlut_bits"],
-                                       incoh_proc_mode=tlp["incoh_proc_mode"],
-                                       init_device=tlp["init_device"])
-        self.o_proj = TrellisLinear(weight_shape=[config.hidden_size, config.num_attention_heads * self.head_dim],
-                                       T=tlp["T"],
-                                       L=tlp["L"],
-                                       V=tlp["V"],
-                                       K=tlp["K"],
-                                       decode_mode=tlp["decode_mode"],
-                                       tlut_bits=tlp["tlut_bits"],
-                                       incoh_proc_mode=tlp["incoh_proc_mode"],
-                                       init_device=tlp["init_device"])
+        self.q_proj = TrellisLinear(
+            weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
+            weight_scales_group_size=tlp["weight_scales_group_size"],
+            incoh_proc_mode=tlp["incoh_proc_mode"],
+            init_device=tlp["init_device"],
+            weight_quantizer_params=TrellisQuantizerParams(
+                **tlp["weight_quantizer_params"]
+            ),
+            input_quantizer_params=None if tlp.get("input_quantizer_params", None) is None \
+                else InputQuantizerParams(**tlp["input_quantizer_params"])
+        )
+        self.k_proj = TrellisLinear(
+            weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
+            weight_scales_group_size=tlp["weight_scales_group_size"],
+            incoh_proc_mode=tlp["incoh_proc_mode"],
+            init_device=tlp["init_device"],
+            weight_quantizer_params=TrellisQuantizerParams(
+                **tlp["weight_quantizer_params"]
+            ),
+            input_quantizer_params=None if tlp.get("input_quantizer_params", None) is None \
+                else InputQuantizerParams(**tlp["input_quantizer_params"])
+        )
+        self.v_proj = TrellisLinear(
+            weight_shape=[config.num_attention_heads * self.head_dim, config.hidden_size],
+            weight_scales_group_size=tlp["weight_scales_group_size"],
+            incoh_proc_mode=tlp["incoh_proc_mode"],
+            init_device=tlp["init_device"],
+            weight_quantizer_params=TrellisQuantizerParams(
+                **tlp["weight_quantizer_params"]
+            ),
+            input_quantizer_params=None if tlp.get("input_quantizer_params", None) is None \
+                else InputQuantizerParams(**tlp["input_quantizer_params"])
+        )
+        self.o_proj = TrellisLinear(
+            weight_shape=[config.hidden_size, config.num_attention_heads * self.head_dim],
+            weight_scales_group_size=tlp["weight_scales_group_size"],
+            incoh_proc_mode=tlp["incoh_proc_mode"],
+            init_device=tlp["init_device"],
+            weight_quantizer_params=TrellisQuantizerParams(
+                **tlp["weight_quantizer_params"]
+            ),
+            input_quantizer_params=None if tlp.get("input_quantizer_params", None) is None \
+                else InputQuantizerParams(**tlp["input_quantizer_params"])
+        )
 
     def forward(
         self,

@@ -1,4 +1,3 @@
-from enum import Enum
 from copy import deepcopy
 import torch
 from torch import nn
@@ -6,92 +5,63 @@ import torch.nn.functional as F
 
 from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (
     incoherence_process, incoherence_preprocess, matmul_hadUt_cuda, matmul_hadU_cuda)
-from qlib.qlayers.trellis_quantizer import trellis_quantizer
-
-
-class InputQuantMode(Enum):
-    PER_CHANNEL = 1
-    PER_TENSOR = 2
-
-
-class InputQuantizer(torch.nn.Module):
-    def __init__(self,
-                 in_channels,
-                 mode=InputQuantMode.PER_CHANNEL,
-                 bit_width=8):
-        super().__init__()
-        self.in_channels = in_channels
-        self.mode = mode
-        if mode==InputQuantMode.PER_TENSOR:
-            self.act_scale = nn.Parameter(torch.tensor(0.0))
-        elif mode==InputQuantMode.PER_CHANNEL:
-            self.act_scale = nn.Parameter(torch.zeros(in_channels))
-        self.bit_width = bit_width
-        self.N = - 2 ** (bit_width - 1) 
-        self.P = 2 ** (bit_width - 1) - 1 
-
-    def forward(self, x):
-        # if self.mode==InputQuantMode.PER_TENSOR:
-        #     x_scale = torch.max(x.min() / self.N, x.max() / self.P)
-        #     if x_scale > self.act_scale.data:
-        #         self.act_scale.data = x_scale * 1.1
-        # elif self.mode==InputQuantMode.PER_CHANNEL:
-        #     reduce_dims = tuple(range(x.dim() - 1))
-        #     x_scale = torch.maximum(
-        #         x.amin(dim=reduce_dims) / self.N, 
-        #         x.amax(dim=reduce_dims) / self.P, 
-        #     )
-        #     replace_indices = self.act_scale.data < x_scale
-        #     self.act_scale.data[replace_indices] = 1.1 * x_scale[replace_indices]
-        # return x
-
-        x_scaled = x / self.act_scale
-        x_clamped = torch.clamp(x_scaled, self.N, self.P)
-        x_q = (x_clamped.round_() - x_clamped).detach() + x_clamped
-        x_q = x_q * self.act_scale
-        return x_q
-        
-        # return x
+from qlib.qlayers.trellis_quantizer import TrellisQuantizer, TrellisQuantizerParams
+from qlib.qlayers.input_quantizer import InputQuantizer, InputQuantizerParams
 
 
 class TrellisLinear(torch.nn.Module):
-    def __init__(self,
-                 weight_shape=None,
-                 T=256,
-                 L=16,
-                 V=2,
-                 K=2,
-                 tlut_bits=10,
-                 decode_mode='LowBitSym',
-                 incoh_proc_mode='qtip',
-                 viterby_bs='auto',
-                 init_device='cuda:0'):
+    def __init__(
+            self,
+            weight_shape,
+            weight_scales_group_size=256,
+            incoh_proc_mode='qtip',
+            init_device='cuda:0',
+            input_quantizer_params=InputQuantizerParams(
+                bit_width=8,
+                group_mode="PER_CHANNEL",
+                use_offset=True
+            ),
+            weight_quantizer_params=TrellisQuantizerParams(
+                T=256,
+                L=16,
+                V=2,
+                K=2,
+                decode_mode="LowBitSym",
+                viterbi_bs="auto"
+            )
+        ):
         super().__init__()
         self.weight_shape = weight_shape
         self.incoh_proc_mode = incoh_proc_mode
         self.init_device = init_device
-        self.weight_quantizer = trellis_quantizer(
-            L=L, 
-            K=K, 
-            V=V,
-            T=T,
-            decode_mode=decode_mode,
-            tlut_bits=tlut_bits,
-            viterby_bs=viterby_bs
-        )
-        self.input_quantizer = torch.nn.Identity()
-        #self.input_quantizer = InputQuantizer(bit_width=8, in_channels=weight_shape[1])
+        self.weight_quantizer = TrellisQuantizer(weight_quantizer_params)
+        if input_quantizer_params is not None:
+            self.input_quantizer = InputQuantizer(in_channels=weight_shape[1],
+                                                  params=input_quantizer_params)
+        else:
+            self.input_quantizer = torch.nn.Identity()
+        
         self.SU = torch.nn.Parameter(torch.empty(self.weight_shape[1], dtype=torch.float16), requires_grad=True)
         self.SV = torch.nn.Parameter(torch.empty(self.weight_shape[0], dtype=torch.float16), requires_grad=True)
+        self.weight_scales_group_size = weight_scales_group_size
         
-        self.scales = torch.nn.Parameter(
-            torch.ones(
-                (self.weight_shape[0] * self.weight_shape[1] // 256, 1), 
-                #(self.weight_shape[0] * self.weight_shape[1] // 128, 1), 
-                dtype=torch.float16
-            ),
-            requires_grad=True
-        )
+        # Init weight scales
+        if isinstance(self.weight_scales_group_size, int):
+            self.weight_scales = torch.nn.Parameter(
+                torch.ones(
+                    (self.weight_shape[0] * self.weight_shape[1] // weight_scales_group_size, 1), 
+                    dtype=torch.float16
+                ),
+                requires_grad=True
+            )
+        elif self.weight_scales_group_size=='PER_CHANNEL':
+            self.weight_scales = torch.nn.Parameter(
+                torch.ones(
+                    (self.weight_shape[0], 1), 
+                    dtype=torch.float16
+                ),
+                requires_grad=True
+            )
         
         trellis_shape = (
             self.weight_shape[0] * self.weight_shape[1] // self.weight_quantizer.T, 
@@ -192,8 +162,8 @@ class TrellisLinear(torch.nn.Module):
         else:
             raise RuntimeError
         
-        w = w.reshape(-1, 256)
-        w = w * self.scales
+        w = w.reshape(-1, self.weight_scales_group_size)
+        w = w * self.weight_scales
         w = w.reshape(self.weight_shape)
         return w
 

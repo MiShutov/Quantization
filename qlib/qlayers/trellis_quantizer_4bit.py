@@ -6,6 +6,7 @@ from tqdm import tqdm
 import math
 from qlib.qlayers.kernel_decompress import decode_compressed #DecodeKernelAG
 from dataclasses import dataclass
+from qlib.qlayers.trellis_quantizer import TrellisQuantizer, TrellisQuantizerParams
 
 
 def get_positive_lowbit_codebook(base_codebook_size, values_bits, bound):
@@ -41,30 +42,6 @@ def get_positive_lowbit_codebook(base_codebook_size, values_bits, bound):
     return cb, scale
 
 
-def decode_1mad(x):
-    """Special 1MAD decoding function"""
-    x = x.to(torch.int64)
-    x = x & ((1 << 32) - 1)
-    x = x * 34038481 + 76625530
-    x = x & ((1 << 32) - 1)
-    y = (x & 255) + ((x >> 8) & 255) + ((x >> 16) & 255) + ((x >> 24) & 255)
-    y = y - 510
-    y = y.to(torch.float32)
-    y = y / 147.800537109375
-    return y
-
-
-def quantlut_sym(tlut, L, nbits):
-    with torch.no_grad():
-        lut = torch.arange(1 << L, device=tlut.device)
-        lut = (lut + 1) * lut
-        sflp = 1 - ((lut >> 15) & 1) * 2
-        lut = (lut >> (16 - nbits - 1)) & ((1 << nbits) - 1)
-    lut = tlut[lut]
-    lut[:, 0] = lut[:, 0] * sflp
-    return lut
-
-
 def quantlut_sym_2d(tlut, L, nbits):
     """2D quantized lookup table with sign flipping"""
     with torch.no_grad():
@@ -81,99 +58,6 @@ def quantlut_sym_2d(tlut, L, nbits):
 # _LOW_BIT_LUT_CACHED = torch.load(fname, weights_only=True).to(torch.float16).cuda().contiguous()
 # _EXPANDED_LUT_CACHED = quantlut_sym_2d(_LOW_BIT_LUT_CACHED, 16, 10).to(torch.float16).cuda().contiguous()
 
-
-@dataclass
-class TrellisQuantizerParams:
-    T: int = 256,
-    L: int = 16,
-    V: int = 2,
-    K: int = 2,
-    decode_mode: str = "LowBitSym",
-    tlut_bits: int = 10,
-    viterbi_bs: int = "auto"
-
-
-class TrellisQuantizer(nn.Module):
-    def __init__(self,
-                 params: TrellisQuantizerParams):
-        super(TrellisQuantizer, self).__init__()
-        self.idx_dtype = torch.int32
-
-        self.L = params.L
-        self.K = params.K
-        self.V = params.V
-        self.T = params.T
-        self.tlut_bits = params.tlut_bits
-        self.decode_mode = params.decode_mode
-
-        # Adaptive batch sizing
-        if params.viterbi_bs == 'auto':
-            self.viterbi_bs = min(2**(24 - self.L), 256)
-        else:
-            self.viterbi_bs = params.viterbi_bs
-
-        if self.decode_mode == '1mad':
-            assert self.V == 1
-            self.register_buffer('lut',
-                               decode_1mad(torch.arange(2**self.L)).unsqueeze(-1))
-        
-        elif self.decode_mode == 'Rand2d':
-            assert self.V == 2
-            fname = f'/home/msst/repo/Quantization/ml/weights/Rand2d_{L}.pt'
-            if not os.path.exists(fname):
-                lut = torch.randn(2**L, 2)
-                torch.save(lut, fname)
-            else:
-                lut = torch.load(fname, weights_only=True)
-            self.register_buffer('lut', lut)
-
-        elif self.decode_mode == 'LowBitSym':
-            assert self.V == 2
-            assert self.tlut_bits in [10, 12] 
-            
-            if self.tlut_bits==10:
-                values_bits = 4
-            else:
-                values_bits = 5
-            
-            bound = 3.0 # 3 standard deviation
-
-            fname = f'/home/msst/repo/Quantization/ml/weights/LowBitSym_v{values_bits}_l{self.tlut_bits}.pt'
-            if not os.path.exists(fname):
-                tlut, scale = get_positive_lowbit_codebook(2**self.tlut_bits, values_bits=values_bits, bound=bound)
-                torch.save(tlut, fname)
-            else:
-                tlut = torch.load(fname, weights_only=True)
-            #self.scales = torch.nn.Parameter(scale, dtype=torch.float32, requires_grad=True)
-            self.register_buffer('tlut', tlut)
-            self.register_buffer(
-                'lut',
-                quantlut_sym_2d(self.tlut, self.L, self.tlut_bits).contiguous())
-
-        elif decode_mode == 'QuantlutSym':
-            if tlut is None:
-                assert self.tlut_bits > 0
-                assert self.V == 2
-                fname = f'/home/msst/repo/Quantization/ml/weights/QuantlutSym_{tlut_bits}_{V}.pt'
-                if not os.path.exists(fname):
-                    tlut = torch.randn(2**self.tlut_bits, self.V)
-                    import scipy
-                    data = torch.randn(1 << 20, 2)
-                    clusters = scipy.cluster.vq.kmeans(data.to(torch.float32), tlut.to(torch.float32))
-                    tlut = torch.tensor(clusters[0])
-                    tlut = (tlut /
-                            tlut.std(unbiased=False)) * 0.9682458365518543
-                    torch.save(tlut, fname)
-                else:
-                    tlut = torch.load(fname, weights_only=True)
-
-                self.register_buffer('tlut', tlut)
-                self.register_buffer(
-                    'lut',
-                    quantlut_sym(self.tlut, self.L, self.tlut_bits).contiguous())
-
-        else:
-            raise Exception
 
 
 
