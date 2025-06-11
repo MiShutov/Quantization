@@ -9,6 +9,6 @@ lm_eval \
     --batch_size 100 \
 	--trust_remote_code 
 
-# ~14min
+# ~14.5min
 
 # --log_samples  logging model responses 

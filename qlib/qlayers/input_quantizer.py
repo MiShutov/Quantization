@@ -26,9 +26,9 @@ class InputQuantizer(torch.nn.Module):
         self.group_mode = InputQuantGroupMode[params.group_mode]
         self.calib_mode = params.calib_mode
         if self.group_mode==InputQuantGroupMode.PER_TENSOR:
-            self.act_scale = nn.Parameter(torch.tensor(0.0))
+            self.act_scales = nn.Parameter(torch.tensor(0.0))
         elif self.group_mode==InputQuantGroupMode.PER_CHANNEL:
-            self.act_scale = nn.Parameter(torch.zeros(in_channels))
+            self.act_scales = nn.Parameter(torch.zeros(in_channels))
         else:
             raise
         self.bit_width = params.bit_width
@@ -39,22 +39,22 @@ class InputQuantizer(torch.nn.Module):
         if self.calib_mode:
             if self.group_mode==InputQuantGroupMode.PER_TENSOR:
                 x_scale = torch.max(x.min() / self.N, x.max() / self.P)
-                if x_scale > self.act_scale.data:
-                    self.act_scale.data = x_scale * 1.1
+                if x_scale > self.act_scales.data:
+                    self.act_scales.data = x_scale * 1.1
             elif self.group_mode==InputQuantGroupMode.PER_CHANNEL:
                 reduce_dims = tuple(range(x.dim() - 1))
                 x_scale = torch.maximum(
                     x.amin(dim=reduce_dims) / self.N, 
                     x.amax(dim=reduce_dims) / self.P, 
                 )
-                replace_indices = self.act_scale.data < x_scale
-                self.act_scale.data[replace_indices] = 1.1 * x_scale[replace_indices]
+                replace_indices = self.act_scales.data < x_scale
+                self.act_scales.data[replace_indices] = 1.1 * x_scale[replace_indices]
             else:
                 raise
             return x
         else:
-            x_scaled = x / self.act_scale
+            x_scaled = x / self.act_scales
             x_clamped = torch.clamp(x_scaled, self.N, self.P)
             x_q = (x_clamped.round_() - x_clamped).detach() + x_clamped
-            x_q = x_q * self.act_scale
+            x_q = x_q * self.act_scales
             return x_q

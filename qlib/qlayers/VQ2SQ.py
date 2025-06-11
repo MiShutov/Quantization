@@ -4,7 +4,12 @@ from torch import nn
 import torch.nn.functional as F
 
 from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (
-    incoherence_process, incoherence_preprocess, matmul_hadUt_cuda, matmul_hadU_cuda)
+    incoherence_process, 
+    incoherence_preprocess, 
+    incoherence_process_lukashevich, 
+    incoherence_preprocess_lukashevich, 
+    matmul_hadUt_cuda, 
+    matmul_hadU_cuda)
 from qlib.qlayers.trellis_quantizer import TrellisQuantizer, TrellisQuantizerParams
 from qlib.qlayers.input_quantizer import InputQuantizer, InputQuantizerParams
 
@@ -41,8 +46,11 @@ class TrellisLinear(torch.nn.Module):
         else:
             self.input_quantizer = torch.nn.Identity()
         
-        self.SU = torch.nn.Parameter(torch.empty(self.weight_shape[1], dtype=torch.float16), requires_grad=True)
-        self.SV = torch.nn.Parameter(torch.empty(self.weight_shape[0], dtype=torch.float16), requires_grad=True)
+        if self.incoh_proc_mode == 'qtip':
+            self.SU = torch.nn.Parameter(torch.empty(self.weight_shape[1], dtype=torch.float16), requires_grad=True)
+            self.SV = torch.nn.Parameter(torch.empty(self.weight_shape[0], dtype=torch.float16), requires_grad=True)
+        elif self.incoh_proc_mode == 'lukashevich':
+            self.SU = torch.nn.Parameter(torch.empty(self.weight_shape[1], dtype=torch.float16), requires_grad=True)
         self.weight_scales_group_size = weight_scales_group_size
         
         # Init weight scales
@@ -73,27 +81,28 @@ class TrellisLinear(torch.nn.Module):
     @torch.no_grad()
     def wrap_module(self, module, verbose=False, *args, **kwargs):
         # TODO bias
+        assert list(self.weight_shape) == list(module.weight.data.shape)
         orig_device = module.weight.device
         self.weight_quantizer = self.weight_quantizer.to(self.init_device)
         w = module.weight.to(self.init_device)
+        w_std = w.std()
         
         # Incoherence processing
         if self.incoh_proc_mode == 'qtip':
             w, SU, SV = incoherence_preprocess(w)
             self.SU.data = SU.to(self.init_device)
             self.SV.data = SV.to(self.init_device)
-        elif self.incoh_proc_mode == 'skip':
-            self.SU = self.SU.to(self.init_device)
-            self.SV = self.SU.to(self.init_device)
+            self.SU *= torch.sqrt(w_std)
+            self.SV *= torch.sqrt(w_std)
+        elif self.incoh_proc_mode == 'lukashevich':
+            w, SU = incoherence_preprocess_lukashevich(w)
+            self.SU.data = SU.to(self.init_device)
+            self.SU *= w_std #TODO: to small values
         else:
             raise RuntimeError
         
-
         # Scale to Normal(0,1)
-        w_std = w.std()
         w = w / w_std
-        self.SU *= torch.sqrt(w_std)
-        self.SV *= torch.sqrt(w_std)
 
         # Quantize
         if verbose and kwargs.get('module_name', False):
@@ -136,6 +145,13 @@ class TrellisLinear(torch.nn.Module):
         self.trellis.data = self.trellis.data.to(self_trellis_dtype)
         
 
+    def apply_weight_scales(self, w):
+        w = w.reshape(-1, self.weight_scales_group_size)
+        w = w * self.weight_scales
+        w = w.reshape(self.weight_shape)
+        #TODO: self.weight_scales_group_size=='PER_CHANNEL'
+        return w
+
     @property
     def weight(self):
         if self.weight_quantizer.L == 16:
@@ -154,28 +170,29 @@ class TrellisLinear(torch.nn.Module):
             w = w_shifted - self.latent_weight
 
         if self.incoh_proc_mode == 'qtip':
-            #w = incoherence_process(w.float(), self.SU, self.SV).to(w.dtype)
             #w = (matmul_hadU_cuda(w.T.float()) * self.SV).to(w.dtype).T
-            w = (matmul_hadU_cuda(w.T) * self.SV).T
-        elif self.incoh_proc_mode == 'skip':
-            w = w * self.SU * self.SV
+            #w = (matmul_hadU_cuda(w.T) * self.SV).T
+            pass
+        elif self.incoh_proc_mode == 'lukashevich':
+            #w = incoherence_process_lukashevich(w, self.SU)
+            pass
         else:
             raise RuntimeError
         
-        w = w.reshape(-1, self.weight_scales_group_size)
-        w = w * self.weight_scales
-        w = w.reshape(self.weight_shape)
+        self.apply_weight_scales(w)
         return w
 
 
     def forward(self, x):
-        if self.incoh_proc_mode == 'qtip':
+        if (self.incoh_proc_mode == 'qtip') or (self.incoh_proc_mode == 'lukashevich'):
             #x = matmul_hadUt_cuda((x * self.SU).float()).to(x.dtype)
             x = matmul_hadUt_cuda(x * self.SU)
         x = self.input_quantizer(x)
         w = self.weight
-
-        return F.linear(weight=w, input=x)
+        out = F.linear(weight=w, input=x)
+        if (self.incoh_proc_mode == 'qtip'):
+            out = matmul_hadU_cuda(out) * self.SV
+        return out
 
 
 ##### INCOHERENCE PROCESSING FOR ACTIVATIONS #####

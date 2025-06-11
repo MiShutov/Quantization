@@ -23,6 +23,7 @@ def get_positive_lowbit_codebook(base_codebook_size, values_bits, bound):
     counts = counts.flatten()
 
     unique_values = scale * (torch.arange(2**(values_bits-1)) + 0.5)
+    #unique_values = (torch.arange(2**(values_bits-1)) + 0.5)
     unique_cb_h = unique_values.repeat(len(unique_values), 1)
     unique_cb_v = unique_cb_h.T
     unique_cb_2d = torch.stack([unique_cb_v, unique_cb_h], dim=0)
@@ -119,9 +120,9 @@ class TrellisQuantizer(nn.Module):
         
         elif self.decode_mode == 'Rand2d':
             assert self.V == 2
-            fname = f'/home/msst/repo/Quantization/ml/weights/Rand2d_{L}.pt'
+            fname = f'/home/msst/repo/Quantization/ml/weights/Rand2d_{self.L}.pt'
             if not os.path.exists(fname):
-                lut = torch.randn(2**L, 2)
+                lut = torch.randn(2**self.L, 2)
                 torch.save(lut, fname)
             else:
                 lut = torch.load(fname, weights_only=True)
@@ -141,20 +142,23 @@ class TrellisQuantizer(nn.Module):
             fname = f'/home/msst/repo/Quantization/ml/weights/LowBitSym_v{values_bits}_l{self.tlut_bits}.pt'
             if not os.path.exists(fname):
                 tlut, scale = get_positive_lowbit_codebook(2**self.tlut_bits, values_bits=values_bits, bound=bound)
-                torch.save(tlut, fname)
+                #torch.save({"tlut:": tlut, "scale" : scale}, fname)
             else:
                 tlut = torch.load(fname, weights_only=True)
-            #self.scales = torch.nn.Parameter(scale, dtype=torch.float32, requires_grad=True)
+                #cb_dict = torch.load(fname, weights_only=True)
+                #tlut = cb_dict['tlut']
+                #scale = cb_dict['scale']
+            #self.codebook_scale = scale
             self.register_buffer('tlut', tlut)
             self.register_buffer(
                 'lut',
                 quantlut_sym_2d(self.tlut, self.L, self.tlut_bits).contiguous())
 
-        elif decode_mode == 'QuantlutSym':
+        elif self.decode_mode == 'QuantlutSym':
             if tlut is None:
                 assert self.tlut_bits > 0
                 assert self.V == 2
-                fname = f'/home/msst/repo/Quantization/ml/weights/QuantlutSym_{tlut_bits}_{V}.pt'
+                fname = f'/home/msst/repo/Quantization/ml/weights/QuantlutSym_{self.tlut_bits}_{self.V}.pt'
                 if not os.path.exists(fname):
                     tlut = torch.randn(2**self.tlut_bits, self.V)
                     import scipy
