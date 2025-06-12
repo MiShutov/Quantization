@@ -22,8 +22,7 @@ def get_positive_lowbit_codebook(base_codebook_size, values_bits, bound):
     counts = counts.round()
     counts = counts.flatten()
 
-    unique_values = scale * (torch.arange(2**(values_bits-1)) + 0.5)
-    #unique_values = (torch.arange(2**(values_bits-1)) + 0.5)
+    unique_values = (torch.arange(2**(values_bits-1)) + 0.5)
     unique_cb_h = unique_values.repeat(len(unique_values), 1)
     unique_cb_v = unique_cb_h.T
     unique_cb_2d = torch.stack([unique_cb_v, unique_cb_h], dim=0)
@@ -142,13 +141,13 @@ class TrellisQuantizer(nn.Module):
             fname = f'/home/msst/repo/Quantization/ml/weights/LowBitSym_v{values_bits}_l{self.tlut_bits}.pt'
             if not os.path.exists(fname):
                 tlut, scale = get_positive_lowbit_codebook(2**self.tlut_bits, values_bits=values_bits, bound=bound)
-                #torch.save({"tlut:": tlut, "scale" : scale}, fname)
+                torch.save({"tlut": tlut, "scale" : scale}, fname)
             else:
-                tlut = torch.load(fname, weights_only=True)
-                #cb_dict = torch.load(fname, weights_only=True)
-                #tlut = cb_dict['tlut']
-                #scale = cb_dict['scale']
-            #self.codebook_scale = scale
+                #tlut = torch.load(fname, weights_only=True)
+                cb_dict = torch.load(fname, weights_only=True)
+                tlut = cb_dict['tlut']
+                scale = cb_dict['scale']
+            self.codebook_scale = scale
             self.register_buffer('tlut', tlut)
             self.register_buffer(
                 'lut',
@@ -302,7 +301,7 @@ class TrellisQuantizer(nn.Module):
         X_shape = X.shape
         assert self.T == 256
         
-        X = X.reshape(-1, self.T)
+        X = X.reshape(-1, self.T) / self.codebook_scale
 
         # Fisrt fase
         roll_X = torch.roll(X, self.T // (2 * self.V) * self.V, 1)

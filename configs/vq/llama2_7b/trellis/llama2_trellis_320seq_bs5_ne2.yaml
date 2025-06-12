@@ -1,8 +1,7 @@
-logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_320seq_bs5_ne2
+logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_gs128_320seq_bs5_ne2_lukashevich
 model_name: Llama2-7b-hf
 fp_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_fp
-q_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_q/T256_L16_V2_K2_cbs10_LowBitSym_qtip
-#qmodel_path: /home/msst/repo/Quantization/logs/checkpoints_Llama2-7b-hf/trellis/T256_L16_V2_K2_cbs10_LowBitSym_qtip 
+q_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_q/gs128_lukashevich_init
 
 training_params:
   train_data:

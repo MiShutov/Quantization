@@ -85,31 +85,40 @@ class TrellisLinear(torch.nn.Module):
         orig_device = module.weight.device
         self.weight_quantizer = self.weight_quantizer.to(self.init_device)
         w = module.weight.to(self.init_device)
-        w_std = w.std()
         
-        # Incoherence processing
-        if self.incoh_proc_mode == 'qtip':
-            w, SU, SV = incoherence_preprocess(w)
+        # Scaling weights to N(0,1) -> scale sign vectors and scales
+        w_std = w.std(dim=-1, keepdim=True)
+        w_scaled = w / w_std
+
+
+        # Incoherence preprocessing
+        if self.incoh_proc_mode in ['qtip', 'qtip_act']:
+            w_scaled_inc, SU, SV = incoherence_preprocess(w_scaled)
             self.SU.data = SU.to(self.init_device)
             self.SV.data = SV.to(self.init_device)
-            self.SU *= torch.sqrt(w_std)
-            self.SV *= torch.sqrt(w_std)
         elif self.incoh_proc_mode == 'lukashevich':
-            w, SU = incoherence_preprocess_lukashevich(w)
+            w_scaled_inc, SU = incoherence_preprocess_lukashevich(w_scaled)
             self.SU.data = SU.to(self.init_device)
-            self.SU *= w_std #TODO: to small values
         else:
             raise RuntimeError
-        
-        # Scale to Normal(0,1)
-        w = w / w_std
+
+        # Scaling sign vectors and weight_scales according to weights scaling
+        w_std_norm = w_std.mean()        
+        self.SU.data *= torch.sqrt(w_std_norm)
+        groups_per_row = w.shape[1] // self.weight_scales_group_size
+        weight_scales_data = torch.ones_like(self.weight_scales.data)
+        weight_scales_data = weight_scales_data.view(w.shape[0], groups_per_row)    
+        if hasattr(self.weight_quantizer, "codebook_scale"):
+            weight_scales_data *= self.weight_quantizer.codebook_scale
+        weight_scales_data *= (w_std / torch.sqrt(w_std_norm)).expand(-1, groups_per_row).to(weight_scales_data.device)
+        self.weight_scales.data = weight_scales_data.view(-1, 1)
 
         # Quantize
         if verbose and kwargs.get('module_name', False):
             print(kwargs['module_name'])
-        reco, states = self.weight_quantizer.quantize(w)
+        reco, states = self.weight_quantizer.quantize(w_scaled_inc)
         if verbose:
-            err = torch.mean((reco - w)**2)
+            err = torch.mean((reco * self.weight_quantizer.codebook_scale - w_scaled_inc)**2)
             print(f"error (w-wq)^2: {err.mean():.3f}")
 
         self.trellis.data = self.weight_quantizer.pack_trellis(states)
@@ -170,27 +179,20 @@ class TrellisLinear(torch.nn.Module):
             w = w_shifted - self.latent_weight
 
         if self.incoh_proc_mode == 'qtip':
-            #w = (matmul_hadU_cuda(w.T.float()) * self.SV).to(w.dtype).T
-            #w = (matmul_hadU_cuda(w.T) * self.SV).T
-            pass
-        elif self.incoh_proc_mode == 'lukashevich':
-            #w = incoherence_process_lukashevich(w, self.SU)
-            pass
-        else:
-            raise RuntimeError
-        
-        self.apply_weight_scales(w)
+            w = incoherence_process(w, self.SU, self.SV)
+
+        w = self.apply_weight_scales(w)
         return w
 
 
     def forward(self, x):
-        if (self.incoh_proc_mode == 'qtip') or (self.incoh_proc_mode == 'lukashevich'):
+        if self.incoh_proc_mode in ['qtip_act', 'lukashevich']:
             #x = matmul_hadUt_cuda((x * self.SU).float()).to(x.dtype)
             x = matmul_hadUt_cuda(x * self.SU)
         x = self.input_quantizer(x)
         w = self.weight
         out = F.linear(weight=w, input=x)
-        if (self.incoh_proc_mode == 'qtip'):
+        if (self.incoh_proc_mode == 'qtip_act'):
             out = matmul_hadU_cuda(out) * self.SV
         return out
 
@@ -198,12 +200,9 @@ class TrellisLinear(torch.nn.Module):
 ##### INCOHERENCE PROCESSING FOR ACTIVATIONS #####
 
 # from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (incoherence_process, 
-#                                                                                 icoherence_process_left,
-#                                                                                 icoherence_process_right,
-# 																				incoherence_process_, 
-# 																				incoherence_preprocess,
-# 																				matmul_hadU_cuda,
-# 																				matmul_hadUt_cuda)
+#                                                                                 incoherence_preprocess,
+# 																				  matmul_hadU_cuda,
+# 																				  matmul_hadUt_cuda)
 # import torch.nn.functional as F
 
 # w = torch.randn(11008, 4096).cuda()
@@ -235,3 +234,51 @@ class TrellisLinear(torch.nn.Module):
 
 # res7 = F.linear(weight=(matmul_hadU_cuda(Wr.T) * SV).T, input=matmul_hadUt_cuda(x * SU))
 # assert torch.allclose(res, res7, atol=1e-3)
+
+
+### SPEED TEST
+
+# seq_len = 25
+# bs = 100
+
+# w = torch.randn(11008, 4096).cuda().half()
+# x = torch.randn(bs, seq_len, 4096).cuda().half()
+# res = F.linear(weight=w, input=x)
+
+# Wr, SU, SV = incoherence_preprocess(w)
+# SU = SU.to(Wr.device).half()
+# SV = SV.to(Wr.device).half()
+# Wr = Wr.half()
+
+#res1 = F.linear(input=x, weight=incoherence_process(Wr, SU, SV))
+#assert torch.allclose(res, res1, atol=1e-3)
+
+#res2 = matmul_hadU_cuda(F.linear(input=matmul_hadUt_cuda(x * SU), weight=Wr)) * SV
+#assert torch.allclose(res, res2, atol=1e-3)
+
+#All in ms
+
+### seqlen 25
+#  bs  t1   t2
+# 100  24   15  # 2500 
+
+### seqlen 50
+#  bs  t1   t2 
+# 100  32   29  # 5000
+
+### seqlen 512
+#  bs  t1   t2
+# 100  186  291 # 5120
+
+### seqlen 4096
+# bs  t1   t2
+#  1  29   24   #4096
+#  5  84   117  #20000
+# 10  151  230  #40000
+# 20  287  OOM
+
+### seqlen 16384
+# bs  t1   t2   
+#  1  70   93   #16000
+#  4 235  373   #64000
+
