@@ -186,14 +186,14 @@ class TrellisLinear(torch.nn.Module):
 
 
     def forward(self, x):
-        if self.incoh_proc_mode in ['qtip_act', 'lukashevich']:
-            #x = matmul_hadUt_cuda((x * self.SU).float()).to(x.dtype)
-            x = matmul_hadUt_cuda(x * self.SU)
-        x = self.input_quantizer(x)
+        x = self.input_quantizer(x, incoh_proc_mode=self.incoh_proc_mode, SU=self.SU)
         w = self.weight
+
         out = F.linear(weight=w, input=x)
+        
         if (self.incoh_proc_mode == 'qtip_act'):
             out = matmul_hadU_cuda(out) * self.SV
+        
         return out
 
 

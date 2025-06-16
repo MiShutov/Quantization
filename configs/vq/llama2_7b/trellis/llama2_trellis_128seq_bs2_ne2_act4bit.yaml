@@ -1,7 +1,7 @@
-logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_128seq_bs2_ne2_quant_act
+logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_128seq_bs2_ne2_act4bit
 model_name: Llama2-7b-hf
 fp_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_fp
-q_blocks_path: /home/msst/repo/Quantization/ml/weights/vc_data/Llama2-7b-hf/per_block_q/T256_L16_V2_K2_cbs10_LowBitSym_qtip_ptq_bs5_act8bit
+q_blocks_path: /home/msst/repo/Quantization/ml/weights/vc_data/Llama2-7b-hf/per_block_q/gs128_lukashevich_ptq_act4bit_calib
 
 
 training_params:
@@ -9,9 +9,9 @@ training_params:
     dataset_name: slim_pajama
     split: train[:1500]
     seq_length: 4096
-    n_train_seq: &n_train_seq 32 # 128
+    n_train_seq: &n_train_seq 256
     n_val_seq: 32
-    batch_size: &batch_size 2 # 4
+    batch_size: &batch_size 2
 
   validation_settings:
     val_before_trainig: True
@@ -25,40 +25,45 @@ training_params:
     scheduler: &scheduler
       class: CosineAnnealingLR
       kwargs:
-        T_max: 256
+        T_max: 300 #256
 
     optimizers:
-      act_scales_optimizer:
+      act_optimizer:
         param_label: act_scale
         class: Adam
         kwargs:
-          lr: 0.0 # 1e-5
+          betas: [0.5, 0.95]
+          lr: 1e-5
         scheduler: *scheduler
 
       scales_optimizer:
-        param_label: scales
+        param_label: weight_scales
         class: Adam
         kwargs:
-          lr: 5e-4
+          betas: [0.5, 0.95]
+          lr: 2.5e-4
         scheduler: *scheduler
 
       SU_optimizer:
         param_label: SU
         class: Adam
         kwargs:
-          lr: 5e-4
+          betas: [0.5, 0.95]
+          lr: 2.5e-4
         scheduler: *scheduler
 
       SV_optimizer:
         param_label: SV
         class: Adam
         kwargs:
-          lr: 5e-4
+          betas: [0.5, 0.95]
+          lr: 2.5e-4
         scheduler: *scheduler
 
       norm_optimizer:
         param_label: norm
         class: Adam
         kwargs:
-          lr: 5e-5
+          betas: [0.5, 0.95]
+          lr: 2.5e-5
         scheduler: *scheduler
