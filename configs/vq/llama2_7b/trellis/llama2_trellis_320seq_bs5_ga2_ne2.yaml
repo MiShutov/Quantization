@@ -1,4 +1,4 @@
-logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_gs128_320seq_bs5_ne2_lukashevich
+logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_gs128_320seq_bs5_ne2_ga2_lukashevich
 model_name: Llama2-7b-hf
 fp_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_fp
 q_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_q/gs128_lukashevich_init
@@ -17,6 +17,7 @@ training_params:
     n_intermediate_val: 8
 
   optimization_settings:
+    gradient_accumulation_steps: 2
     n_epochs: 2
     loss_fn: !LpLoss
       p: 2
@@ -31,26 +32,26 @@ training_params:
         param_label: weight_scales
         class: Adam
         kwargs:
-          lr: 5e-4
+          lr: 7.5e-4 #5e-4
         #scheduler: *scheduler
 
       SU_optimizer:
         param_label: SU
         class: Adam
         kwargs:
-          lr: 5e-4
+          lr: 7.5e-4 #5e-4
         #scheduler: *scheduler
 
       SV_optimizer:
         param_label: SV
         class: Adam
         kwargs:
-          lr: 5e-4
+          lr: 7.5e-4 #5e-4
         #scheduler: *scheduler
 
       norm_optimizer:
         param_label: norm
         class: Adam
         kwargs:
-          lr: 5e-5
+          lr: 7.5e-5 #5e-5
         #scheduler: *scheduler

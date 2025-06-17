@@ -36,7 +36,6 @@ class HomequantTrainerPTQ():
         self.activation_storage = prepare_trainig_dataset(training_config['train_data'], tokenizer)
         self.optimization_config = training_config['optimization_settings']
         self.validation_settings = training_config.get('validation_settings', None)
-        self.training_settings = training_config.get('training_settings', {})
         self.quant_classes = quant_classes
         
         self.store_dtype = store_dtype
@@ -150,7 +149,7 @@ class HomequantTrainerPTQ():
                 optimization_step(
                     optimizers=optimizers, 
                     step=step, 
-                    training_settings=self.training_settings
+                    optimization_config=self.optimization_config
                 )
 
                 # Intermediate validation

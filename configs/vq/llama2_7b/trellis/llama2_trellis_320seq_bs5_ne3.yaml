@@ -1,4 +1,4 @@
-logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_gs128_320seq_bs5_ne2_lukashevich
+logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_gs128_320seq_bs5_ne3_lukashevich
 model_name: Llama2-7b-hf
 fp_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_fp
 q_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_q/gs128_lukashevich_init
@@ -14,17 +14,17 @@ training_params:
 
   validation_settings:
     val_before_trainig: True
-    n_intermediate_val: 8
+    n_intermediate_val: 6
 
   optimization_settings:
-    n_epochs: 2
+    n_epochs: 3
     loss_fn: !LpLoss
       p: 2
 
-    # scheduler: &scheduler
-    #   class: CosineAnnealingLR
-    #   kwargs:
-    #     T_max: 128
+    scheduler: &scheduler
+      class: CosineAnnealingLR
+      kwargs:
+        T_max: 256
 
     optimizers:
       scales_optimizer:
@@ -32,25 +32,29 @@ training_params:
         class: Adam
         kwargs:
           lr: 5e-4
-        #scheduler: *scheduler
+          #betas: [0.9, 0.95]
+        scheduler: *scheduler
 
       SU_optimizer:
         param_label: SU
         class: Adam
         kwargs:
           lr: 5e-4
-        #scheduler: *scheduler
+          #betas: [0.9, 0.95]
+        scheduler: *scheduler
 
       SV_optimizer:
         param_label: SV
         class: Adam
         kwargs:
           lr: 5e-4
-        #scheduler: *scheduler
+          #betas: [0.9, 0.95]
+        scheduler: *scheduler
 
       norm_optimizer:
         param_label: norm
         class: Adam
         kwargs:
           lr: 5e-5
-        #scheduler: *scheduler
+          #betas: [0.9, 0.95]
+        scheduler: *scheduler

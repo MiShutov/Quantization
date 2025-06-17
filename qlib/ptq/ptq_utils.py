@@ -117,16 +117,19 @@ def prepare_optimizers(config, module):
 def optimization_step(
         optimizers, 
         step=None, 
-        training_settings=None
+        optimization_config=None
     ):
+    gradient_accumulation_steps = optimization_config.get("gradient_accumulation_steps", 1)
+    if step % gradient_accumulation_steps == 0:
+        #print('step:', step, "gradient_accumulation_steps:", gradient_accumulation_steps, 'w/o update')
+        return
+    
     for optimizer_name in optimizers:
         if optimizer_name == "grad_scaler":
             continue
 
         optim = optimizers[optimizer_name]['optimizer']
         scheduler = optimizers[optimizer_name]['scheduler']
-        
-        # optim.step()
 
         grad_scaler = optimizers['grad_scaler']
         grad_scaler.step(optim)

@@ -44,7 +44,10 @@ class TrellisLinear(torch.nn.Module):
             self.input_quantizer = InputQuantizer(in_channels=weight_shape[1],
                                                   params=input_quantizer_params)
         else:
-            self.input_quantizer = torch.nn.Identity()
+            self.input_quantizer = InputQuantizer(in_channels=weight_shape[1],
+                                                  use_as_Identity=True,
+                                                  params=None
+                                                  )
         
         if self.incoh_proc_mode == 'qtip':
             self.SU = torch.nn.Parameter(torch.empty(self.weight_shape[1], dtype=torch.float16), requires_grad=True)

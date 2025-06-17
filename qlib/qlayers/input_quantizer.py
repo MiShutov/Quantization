@@ -11,6 +11,13 @@ class InputQuantGroupMode(Enum):
     PER_TENSOR = 2
 
 
+# class IndentityQuantizer(nn.Module):
+#     def __init__(self, *args, **kwargs):
+#         super(IndentityQuantizer, self).__init__()
+    
+#     def forward(self, x, *args, **kwargs):
+#         return x
+
 @dataclass
 class InputQuantizerParams:
     bit_width : int = 8,
@@ -23,8 +30,13 @@ class InputQuantizerParams:
 class InputQuantizer(torch.nn.Module):
     def __init__(self,
                  in_channels: int,
-                 params: InputQuantizerParams):
+                 params: InputQuantizerParams=None,
+                 use_as_Identity=False):
         super().__init__()
+        self.use_as_Identity = use_as_Identity
+        if self.use_as_Identity:
+            return
+
         self.in_channels = in_channels
         self.group_mode = InputQuantGroupMode[params.group_mode]
         self.calib_mode = params.calib_mode
@@ -49,6 +61,10 @@ class InputQuantizer(torch.nn.Module):
         if incoh_proc_mode in ['qtip_act', 'lukashevich']:
             #x = matmul_hadUt_cuda((x * self.SU).float()).to(x.dtype)
             x = matmul_hadUt_cuda(x * SU)
+
+        if self.use_as_Identity:
+            return x
+
 
         if self.calib_mode:
             if self.group_mode==InputQuantGroupMode.PER_TENSOR:

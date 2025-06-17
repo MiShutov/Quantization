@@ -1,7 +1,7 @@
 logdir: /home/msst/repo/Quantization/logs/llama2-7b/trellis/llama2_trellis_128seq_bs2_ne2_act8bit
 model_name: Llama2-7b-hf
 fp_blocks_path: /mnt/ssd_storage/ml/weights/vc_data/Llama2-7b-hf/per_block_fp
-q_blocks_path: /home/msst/repo/Quantization/ml/weights/vc_data/Llama2-7b-hf/per_block_q/gs128_lukashevich_ptq_act8bit_calib
+q_blocks_path: /home/msst/repo/Quantization/ml/weights/vc_data/Llama2-7b-hf/per_block_q/gs128_lukashevich_init_act8bit_calib
 
 
 training_params:
@@ -15,10 +15,10 @@ training_params:
 
   validation_settings:
     val_before_trainig: True
-    n_intermediate_val: 2 #4
+    n_intermediate_val: 4
 
   optimization_settings:
-    n_epochs: 1
+    n_epochs: 2
     loss_fn: !LpLoss
       p: 2
 
@@ -28,37 +28,37 @@ training_params:
         T_max: 256
 
     optimizers:
-      act_optimizer:
-        param_label: act_scales
-        class: Adam
-        kwargs:
-          lr: 1e-5
-        scheduler: *scheduler
+      # act_optimizer:
+      #   param_label: act_scales
+      #   class: Adam
+      #   kwargs:
+      #     lr: 1e-5
+      #   scheduler: *scheduler
 
       scales_optimizer:
         param_label: weight_scales
         class: Adam
         kwargs:
-          lr: 1e-4
+          lr: 5e-4
         scheduler: *scheduler
 
       SU_optimizer:
         param_label: SU
         class: Adam
         kwargs:
-          lr: 1e-4
+          lr: 5e-4
         scheduler: *scheduler
 
       SV_optimizer:
         param_label: SV
         class: Adam
         kwargs:
-          lr: 1e-4
+          lr: 5e-4
         scheduler: *scheduler
 
-      # norm_optimizer:
-      #   param_label: norm
-      #   class: Adam
-      #   kwargs:
-      #     lr: 2.5e-5
-      #   scheduler: *scheduler
+      norm_optimizer:
+        param_label: norm
+        class: Adam
+        kwargs:
+          lr: 5e-5
+        scheduler: *scheduler
