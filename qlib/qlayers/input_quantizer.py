@@ -3,6 +3,8 @@ import torch.nn as nn
 from enum import Enum
 from dataclasses import dataclass
 from qlib.utils.incoherence_preprocessing.incoherence_process_functions import matmul_hadUt_cuda
+from microxcaling.mx import finalize_mx_specs
+from microxcaling.mx.mx_ops import quantize_mx_op
 
 CALIB_SCALE = 1.1
 
@@ -25,6 +27,7 @@ class InputQuantizerParams:
     use_offset : bool = True,
     calib_mode: bool = False,
     relative_scale: bool = False,
+    mx_format: str = None
 
 
 class InputQuantizer(torch.nn.Module):
@@ -36,6 +39,17 @@ class InputQuantizer(torch.nn.Module):
         self.use_as_Identity = use_as_Identity
         if self.use_as_Identity:
             return
+
+        if params.mx_format is not None:
+            self.mx_specs = finalize_mx_specs({
+                'w_elem_format': params.mx_format,
+                'a_elem_format': params.mx_format,
+                'block_size': 32,
+                'custom_cuda': True,
+                'quantize_backprop': False,
+            })
+            return
+
 
         self.in_channels = in_channels
         self.group_mode = InputQuantGroupMode[params.group_mode]
@@ -63,6 +77,16 @@ class InputQuantizer(torch.nn.Module):
             x = matmul_hadUt_cuda(x * SU)
 
         if self.use_as_Identity:
+            return x
+
+        if hasattr(self, 'mx_specs'):
+            x = quantize_mx_op(
+                x,
+                self.mx_specs,
+                elem_format=self.mx_specs['a_elem_format'],
+                axes=[-1],
+                round=self.mx_specs["round_mx_output"],
+            ).to(x.dtype)
             return x
 
 

@@ -301,7 +301,8 @@ class TrellisQuantizer(nn.Module):
         X_shape = X.shape
         assert self.T == 256
         
-        X = X.reshape(-1, self.T) / self.codebook_scale
+        if hasattr(self, self.codebook_scale):
+            X = X.reshape(-1, self.T) / self.codebook_scale
 
         # Fisrt fase
         roll_X = torch.roll(X, self.T // (2 * self.V) * self.V, 1)
