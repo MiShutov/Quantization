@@ -71,7 +71,7 @@ def quantlut_sym_2d(tlut, L, nbits):
         lut = torch.arange(1 << L, device=tlut.device)
         lut = (lut + 1) * lut
         sflp0 = 1 - ((lut >> 15) & 1) * 2
-        sflp1 = 1 - ((lut >> 13) & 1) * 2
+        sflp1 = 1 - ((lut >> 13) & 1) * 2        
         lut = (lut >> (16 - nbits - 1)) & ((1 << nbits) - 1)
     lut = tlut[lut] * torch.stack([sflp0, sflp1]).T
     return lut
@@ -95,7 +95,8 @@ class TrellisQuantizerParams:
 
 class TrellisQuantizer(nn.Module):
     def __init__(self,
-                 params: TrellisQuantizerParams):
+                 params: TrellisQuantizerParams,
+                 **kwargs):
         super(TrellisQuantizer, self).__init__()
         self.idx_dtype = torch.int32
 
@@ -174,6 +175,13 @@ class TrellisQuantizer(nn.Module):
                 self.register_buffer(
                     'lut',
                     quantlut_sym(self.tlut, self.L, self.tlut_bits).contiguous())
+
+
+        elif self.decode_mode == 'load_tlut':
+            self.register_buffer('tlut', kwargs["tlut"])
+            self.register_buffer(
+                'lut',
+                quantlut_sym_2d(self.tlut, self.L, self.tlut_bits).contiguous())
 
         else:
             raise Exception
@@ -301,8 +309,10 @@ class TrellisQuantizer(nn.Module):
         X_shape = X.shape
         assert self.T == 256
         
-        if hasattr(self, self.codebook_scale):
-            X = X.reshape(-1, self.T) / self.codebook_scale
+
+        X = X.reshape(-1, self.T)
+        if hasattr(self, "codebook_scale"):
+            X = X / self.codebook_scale
 
         # Fisrt fase
         roll_X = torch.roll(X, self.T // (2 * self.V) * self.V, 1)
