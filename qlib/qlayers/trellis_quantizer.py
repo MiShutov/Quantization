@@ -6,6 +6,10 @@ from tqdm import tqdm
 import math
 from qlib.qlayers.kernel_decompress import decode_compressed #DecodeKernelAG
 from dataclasses import dataclass
+from microxcaling.mx.mx_ops import (
+    _get_format_params, _reshape_to_blocks, 
+    _shared_exponents, _undo_reshape_to_blocks, quantize_mx_op
+)
 
 
 def get_positive_lowbit_codebook(base_codebook_size, values_bits, bound):
@@ -107,6 +111,8 @@ class TrellisQuantizer(nn.Module):
         self.tlut_bits = params.tlut_bits
         self.decode_mode = params.decode_mode
 
+        self.mx_mode = False
+
         # Adaptive batch sizing
         if params.viterbi_bs == 'auto':
             self.viterbi_bs = min(2**(24 - self.L), 256)
@@ -183,9 +189,64 @@ class TrellisQuantizer(nn.Module):
                 'lut',
                 quantlut_sym_2d(self.tlut, self.L, self.tlut_bits).contiguous())
 
+        elif self.decode_mode.startswith('mx_'):
+            self.mx_mode = True
+            self.w_elem_format = self.decode_mode.split('mx_')[1]
         else:
             raise Exception
 
+
+    def init_lut_mx(self, w, shared_exp, mx_specs):
+        axes=[-1]
+        qis_weight = quantize_mx_op(
+            w,
+            mx_specs,
+            elem_format=mx_specs['w_elem_format'],
+            axes=axes,
+            round=mx_specs["round_mx_output"],
+        )
+
+        _qis_weight, axes, orig_shape, padded_shape = _reshape_to_blocks(qis_weight, axes, mx_specs["block_size"])
+        _qis_weight_scaled = _qis_weight / 2**shared_exp
+
+        with torch.no_grad():
+            uniq_pos = torch.unique(_qis_weight_scaled.abs())
+
+        base_codebook_size = 2**self.tlut_bits
+        sample_values = int(base_codebook_size * 1.5)
+
+        counts = torch.zeros_like(uniq_pos).to(torch.int32)
+        for i, v in enumerate(uniq_pos):
+            counts[i] = (_qis_weight_scaled.abs().cpu()==v.cpu()).sum()
+            # if v == 0.0:
+            #     counts[i] /= 2
+
+        freq = (counts / counts.sum()).unsqueeze(0)
+
+
+        freq_2d = freq.T @ freq
+        counts = (freq_2d * sample_values / freq_2d.sum())
+        counts = counts.round()
+        counts = counts.flatten()
+
+        unique_cb_h = uniq_pos.repeat(len(uniq_pos), 1)
+        unique_cb_v = unique_cb_h.T
+        unique_cb_2d = torch.stack([unique_cb_v, unique_cb_h], dim=0)
+
+        unique_cb = unique_cb_2d.reshape(2, -1).T
+
+        cb = []
+        for i, c in enumerate(counts):
+            cb += int(c) * [unique_cb[i],]
+            
+        cb = torch.stack(cb)
+        n_to_remove = len(cb)- base_codebook_size
+        torch.manual_seed(0)
+        tlut = cb[torch.randperm(len(cb))][n_to_remove:]
+        self.register_buffer('tlut', tlut)
+        self.register_buffer(
+            'lut',
+            quantlut_sym_2d(self.tlut, self.L, self.tlut_bits).contiguous())
 
 
     def recons(self, encoded, **kwargs):

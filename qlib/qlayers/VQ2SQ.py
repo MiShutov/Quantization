@@ -13,6 +13,42 @@ from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (
 from qlib.qlayers.trellis_quantizer import TrellisQuantizer, TrellisQuantizerParams
 from qlib.qlayers.input_quantizer import InputQuantizer, InputQuantizerParams
 
+from microxcaling.mx import finalize_mx_specs
+from microxcaling.mx.elemwise_ops import quantize_elemwise_op
+from microxcaling.mx.mx_ops import (
+    _get_format_params, _reshape_to_blocks, 
+    _shared_exponents, _undo_reshape_to_blocks,
+)
+
+
+def get_shared_exps(A, mx_specs, axes):
+    block_size = mx_specs['block_size']
+    if mx_specs["scale_bits"] == 0:
+        scale_bits = 8
+    else:
+        scale_bits = mx_specs["scale_bits"]
+    
+    axes = [axes] if type(axes) == int else axes
+    axes = [x + A.ndim if x < 0 else x for x in axes]    
+    shared_exp_axes = [x + 1 for x in axes] if block_size > 0 else axes
+            
+    A, axes, orig_shape, padded_shape = _reshape_to_blocks(
+        A, axes, block_size
+    )
+
+    shared_exp = _shared_exponents(
+        A, method=mx_specs['shared_exp_method'], axes=shared_exp_axes, ebits=0,
+    )
+
+    emax = _get_format_params(mx_specs['w_elem_format'])[2]
+    shared_exp = shared_exp - emax
+    
+    scale_emax = 2**(scale_bits-1) - 1
+    shared_exp[shared_exp > scale_emax] = float("NaN")
+    shared_exp[shared_exp < -scale_emax] = -scale_emax
+    
+    return shared_exp
+
 
 class TrellisLinear(torch.nn.Module):
     def __init__(
@@ -89,44 +125,106 @@ class TrellisLinear(torch.nn.Module):
         self.weight_quantizer = self.weight_quantizer.to(self.init_device)
         w = module.weight.to(self.init_device)
         
-        # Scaling weights to N(0,1) -> scale sign vectors and scales
-        w_std = w.std(dim=-1, keepdim=True)
-        w_scaled = w / w_std
-
-
         # Incoherence preprocessing
-        if self.incoh_proc_mode in ['qtip', 'qtip_act']:
-            w_scaled_inc, SU, SV = incoherence_preprocess(w_scaled)
-            self.SU.data = SU.to(self.init_device)
-            self.SV.data = SV.to(self.init_device)
-        elif self.incoh_proc_mode == 'lukashevich':
-            w_scaled_inc, SU = incoherence_preprocess_lukashevich(w_scaled)
-            self.SU.data = SU.to(self.init_device)
+        if self.incoh_proc_mode in ['qtip', 'qtip_act', 'lukashevich']:
+            w_std_scales = w.std(dim=-1, keepdim=True) / w.std()
+            w_std_scales = torch.ones_like(w_std_scales)
+            w_std_scaled = w / w_std_scales
+            if self.incoh_proc_mode in ['qtip', 'qtip_act']:
+                w_inc, SU, SV = incoherence_preprocess(w_std_scaled)
+                self.SU.data = SU.to(self.init_device)
+                self.SV.data = SV.to(self.init_device)
+            elif self.incoh_proc_mode == 'lukashevich':
+                w_inc, SU = incoherence_preprocess_lukashevich(w_std_scaled)
+                self.SU.data = SU.to(self.init_device)
+            #self.SU.data *= w_std_scales[:, 0]
+        elif self.incoh_proc_mode == 'skip':
+            w_inc = w
         else:
             raise RuntimeError
-
-        # Scaling sign vectors and weight_scales according to weights scaling
-        w_std_norm = w_std.mean()        
-        self.SU.data *= torch.sqrt(w_std_norm)
-        groups_per_row = w.shape[1] // self.weight_scales_group_size
-        weight_scales_data = torch.ones_like(self.weight_scales.data)
-        weight_scales_data = weight_scales_data.view(w.shape[0], groups_per_row)    
-        if hasattr(self.weight_quantizer, "codebook_scale"):
-            weight_scales_data *= self.weight_quantizer.codebook_scale
-        weight_scales_data *= (w_std / torch.sqrt(w_std_norm)).expand(-1, groups_per_row).to(weight_scales_data.device)
-        self.weight_scales.data = weight_scales_data.view(-1, 1)
-
-        # Quantize
-        if verbose and kwargs.get('module_name', False):
-            print(kwargs['module_name'])
-        reco, states = self.weight_quantizer.quantize(w_scaled_inc)
-        if verbose:
-            err = torch.mean((reco * self.weight_quantizer.codebook_scale - w_scaled_inc)**2)
-            print(f"error (w-wq)^2: {err.mean():.3f}")
-
-        self.trellis.data = self.weight_quantizer.pack_trellis(states)
         
-        return deepcopy(self).to(orig_device)
+
+        if self.weight_quantizer.mx_mode:
+            mx_specs = {
+                'w_elem_format': self.weight_quantizer.w_elem_format,
+                'block_size': self.weight_scales_group_size,
+                'bfloat': 16,
+                'custom_cuda': True,
+                'quantize_backprop': False,
+            }
+            mx_specs = finalize_mx_specs(mx_specs)
+
+            axes = [-1]
+            block_size = mx_specs['block_size']
+            shared_exp = get_shared_exps(w_inc, mx_specs, axes=axes)
+
+            _w_inc, axes, orig_shape, padded_shape = _reshape_to_blocks(w_inc, axes, block_size)
+            _w_inc_scaled = _w_inc / 2**shared_exp
+            w_inc_scaled = _undo_reshape_to_blocks(_w_inc_scaled, padded_shape, orig_shape, axes)
+
+            self.weight_quantizer.init_lut_mx(w_inc, shared_exp, mx_specs)
+            self.weight_scales.data = (2**shared_exp).view(-1, 1)
+
+            # Quantize
+            if verbose and kwargs.get('module_name', False):
+                print(kwargs['module_name'])
+            w_inc_scaled_q, states = self.weight_quantizer.quantize(w_inc_scaled)
+            if verbose:
+                _w_inc_scaled_q, axes, orig_shape, padded_shape = _reshape_to_blocks(w_inc_scaled_q, axes, block_size)
+                _w_inc_q = _w_inc_scaled_q * 2**shared_exp
+                w_inc_q = _undo_reshape_to_blocks(_w_inc_q, padded_shape, orig_shape, axes)
+
+                w_q = incoherence_process_lukashevich(w_inc_q, self.SU)
+                w_q_grouped = w_q.reshape(-1, 256)
+                w_grouped = w.reshape(-1, 256)
+
+                err = torch.mean((w_q_grouped / w.std() - w_grouped / w.std()) ** 2, dim=-1)
+                #err  = torch.mean(((w_q - w)**2).reshape(-1, 256), dim=-1)
+                print(f"error: {err.mean():.3f} ± {err.std():.3f}")
+
+
+            self.trellis.data = self.weight_quantizer.pack_trellis(states)
+            return deepcopy(self).to(orig_device)
+
+        else:
+            # Scaling weights to N(0,1) -> scale sign vectors and scales
+            w_std = w.std(dim=-1, keepdim=True)
+            w_scaled = w / w_std
+
+
+            # Incoherence preprocessing
+            if self.incoh_proc_mode in ['qtip', 'qtip_act']:
+                w_scaled_inc, SU, SV = incoherence_preprocess(w_scaled)
+                self.SU.data = SU.to(self.init_device)
+                self.SV.data = SV.to(self.init_device)
+            elif self.incoh_proc_mode == 'lukashevich':
+                w_scaled_inc, SU = incoherence_preprocess_lukashevich(w_scaled)
+                self.SU.data = SU.to(self.init_device)
+            else:
+                raise RuntimeError
+
+            # Scaling sign vectors and weight_scales according to weights scaling
+            w_std_norm = w_std.mean()        
+            self.SU.data *= torch.sqrt(w_std_norm)
+            groups_per_row = w.shape[1] // self.weight_scales_group_size
+            weight_scales_data = torch.ones_like(self.weight_scales.data)
+            weight_scales_data = weight_scales_data.view(w.shape[0], groups_per_row)    
+            if hasattr(self.weight_quantizer, "codebook_scale"):
+                weight_scales_data *= self.weight_quantizer.codebook_scale
+            weight_scales_data *= (w_std / torch.sqrt(w_std_norm)).expand(-1, groups_per_row).to(weight_scales_data.device)
+            self.weight_scales.data = weight_scales_data.view(-1, 1)
+
+            # Quantize
+            if verbose and kwargs.get('module_name', False):
+                print(kwargs['module_name'])
+            reco, states = self.weight_quantizer.quantize(w_scaled_inc)
+            if verbose:
+                err = torch.mean((reco * self.weight_quantizer.codebook_scale - w_scaled_inc)**2)
+                print(f"error (w-wq)^2: {err.mean():.3f}")
+
+            self.trellis.data = self.weight_quantizer.pack_trellis(states)
+            
+            return deepcopy(self).to(orig_device)
 
 
     @torch.no_grad()
