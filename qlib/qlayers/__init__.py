@@ -5,3 +5,5 @@ from qlib.qlayers.symquant_layers import SymHQLinear, HaarSymHQLinear
 from qlib.qlayers.VQ2SQ import TrellisLinear
 from qlib.qlayers.trellis_quantizer import TrellisQuantizer, TrellisQuantizerParams
 from qlib.qlayers.input_quantizer import InputQuantizer, InputQuantizerParams
+
+from qlib.qlayers.lsq_linear import LSQLinear
