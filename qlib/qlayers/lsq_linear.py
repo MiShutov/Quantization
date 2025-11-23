@@ -3,7 +3,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from dataclasses import dataclass
-from qlib import MinMaxInitializer
+# from qlib import MinMaxInitializer
 
 
 def ste_round_pass(x):

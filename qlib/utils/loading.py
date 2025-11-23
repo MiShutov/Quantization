@@ -1,13 +1,13 @@
 import os
-import nip
+# import nip
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset
 
-PATH_TO_DATASETS = '/mnt/ssd_storage/ml/llm/datasets'
-CACHE_DIR = "/mnt/ssd_storage/ml/llm/datasets/huggingface_cache"
-PATH_TO_PRETRAINED_MODELS = '/mnt/ssd_storage/ml/llm/pretrained_models'
+PATH_TO_DATASETS = '/media/msst/ssd_storage/ml/llm/datasets'
+CACHE_DIR = "/media/msst/ssd_storage/ml/llm/datasets/huggingface_cache"
+PATH_TO_PRETRAINED_MODELS = '/media/msst/ssd_storage/ml/llm/pretrained_models'
 
 
 def load_tokenizer(model_name):

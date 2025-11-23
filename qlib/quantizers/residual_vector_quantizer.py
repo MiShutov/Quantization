@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 
-import faiss
+# import faiss
 #from cuml.cluster import KMeans
 #from cuml.common.device_selection import using_device_type
 

@@ -1,5 +1,5 @@
 import torch
-import faiss
+# import faiss
 
 
 @torch.no_grad()

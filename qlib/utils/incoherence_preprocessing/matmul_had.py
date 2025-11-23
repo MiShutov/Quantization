@@ -1,6 +1,6 @@
 # adapted from https://github.com/Cornell-RelaxML/quip-sharp
 
-import fast_hadamard_transform
+# import fast_hadamard_transform
 import torch
 import gc
 

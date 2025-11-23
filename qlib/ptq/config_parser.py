@@ -1,7 +1,7 @@
 import torch
 import os
 import shutil
-from nip import load
+# from nip import load
 from qlib.utils.loading import load_llama
 from qlib.ptq.ptq_train import TrainerPTQ, free_unused_memory
 from qlib.utils.evaluation import Tester

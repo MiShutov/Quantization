@@ -13,12 +13,12 @@ from qlib.utils.incoherence_preprocessing.incoherence_process_functions import (
 from qlib.qlayers.trellis_quantizer import TrellisQuantizer, TrellisQuantizerParams
 from qlib.qlayers.input_quantizer import InputQuantizer, InputQuantizerParams
 
-from microxcaling.mx import finalize_mx_specs
-from microxcaling.mx.elemwise_ops import quantize_elemwise_op
-from microxcaling.mx.mx_ops import (
-    _get_format_params, _reshape_to_blocks, 
-    _shared_exponents, _undo_reshape_to_blocks,
-)
+# from microxcaling.mx import finalize_mx_specs
+# from microxcaling.mx.elemwise_ops import quantize_elemwise_op
+# from microxcaling.mx.mx_ops import (
+#     _get_format_params, _reshape_to_blocks, 
+#     _shared_exponents, _undo_reshape_to_blocks,
+# )
 
 
 def get_shared_exps(A, mx_specs, axes):
