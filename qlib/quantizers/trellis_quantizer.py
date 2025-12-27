@@ -63,6 +63,7 @@ def int16_to_mx_four(x, mx_decoder):
     x4 = (x >> 12) & 0b1111
     return mx_decoder(torch.stack([x4, x3, x2, x1], dim=-1))
 
+
 def int16_to_fp8_pair(x):
     x = x.int() & 0xFFFF # check int16
 
@@ -248,6 +249,7 @@ class TrellisQuantizer(nn.Module):
 
         return prev_state, cost
 
+
     def viterbi(self, training_lut, X, overlap=None):
         """Optimized Viterbi decoding with time-major storage"""
 
@@ -304,6 +306,7 @@ class TrellisQuantizer(nn.Module):
 
         return final_state.transpose(0, 1)  # Return as (B, T_v)
 
+
     def quantize_seq(self, training_lut, X, overlap=None, **kwargs):
         """Quantize sequence with batch processing"""
         n_seq, T = X.shape
@@ -325,7 +328,89 @@ class TrellisQuantizer(nn.Module):
         Qidxs = Qidxs.reshape(n_seq_padded, T // self.V)[:n_seq]
         return Qidxs
 
-    def quantize(self, X, return_reco=False, **kwargs):
+    
+    def viterbi_tail_bite(self, training_lut, X):
+        """Optimized Viterbi decoding with time-major storage"""
+
+        # State transition buffers
+        sumdelta = (torch.arange(2 ** (self.K * self.V), device=X.device) << (self.L - self.K * self.V)).view(1, 1, -1)
+
+        # State candidates: maps (reduced_state, delta) -> full_state
+        # Shape: (1, 2^(L-K*V), 2^(K*V))
+        state_candidates = (torch.arange(2**self.L, device=X.device).unsqueeze(0) >> (self.K * self.V))[
+            0, :: 2 ** (self.K * self.V)
+        ].unsqueeze(-1) + sumdelta
+        
+        B = X.shape[0]
+        T_v = self.T // self.V
+
+        # Forward pass
+        cost = (training_lut - X[:, : self.V].unsqueeze(1)).square().sum(dim=-1)
+
+        # print("cost.min", cost.min(dim=1).values)
+
+        top_k = 1 #2**16 #32 #64
+        values, indices = torch.topk(cost, k=top_k, dim=1, largest=False)
+        first_bytes = (indices >> 8) & 0xFF
+        mode, _ = torch.mode(first_bytes, dim=1, keepdim=True)
+        # mode = torch.tensor([182, 169, 247,   5]).cuda().unsqueeze(-1)
+        # mode = torch.zeros(B).cuda().unsqueeze(-1)
+
+        # print("mode:", mode[:, 0])
+
+        cost_mask = ((torch.arange(1 << 16, device=cost.device) >> 8) & 0xFF).expand_as(cost)
+        cost_mask = (cost_mask != mode.expand_as(cost)).float()
+        cost_mask[cost_mask != 0] = torch.tensor(torch.inf)
+        cost = cost + cost_mask
+
+        # Time-major storage for efficient backtrace
+        from_state = torch.zeros(T_v, B, 2 ** (self.L - self.K * self.V), dtype=torch.long, device=X.device)
+        for i in range(1, T_v):
+            obs = X[:, i * self.V : (i + 1) * self.V]
+            prev_state, cost = self.update(
+                training_lut.to(torch.float32),
+                cost.to(torch.float32),
+                obs.to(torch.float32),
+                state_candidates,
+            )
+            from_state[i] = prev_state
+
+        # Backtrace
+
+        backtrace_cost_mask = ((torch.arange(1 << 16, device=cost.device)) & 0xFF).expand_as(cost)
+        backtrace_cost_mask = (backtrace_cost_mask != mode.expand_as(cost)).float()
+        backtrace_cost_mask[backtrace_cost_mask != 0] = torch.tensor(torch.inf)
+        cost = cost + backtrace_cost_mask
+
+        final_state = torch.zeros(T_v, B, dtype=self.idx_dtype, device=X.device)
+        final_state[T_v - 1] = torch.argmin(cost, dim=-1)
+
+        for i in range(T_v - 1, 0, -1):
+            reduced_idx = (final_state[i] >> (self.K * self.V)).long().unsqueeze(1)
+            final_state[i - 1] = torch.gather(from_state[i], 1, reduced_idx).squeeze(1)
+
+        return final_state.transpose(0, 1)
+
+
+    def quantize_seq_ftb(self, training_lut, X):
+        """Quantize sequence with batch processing"""
+        n_seq, T = X.shape
+        batch_padding_len = math.ceil(n_seq / self.viterbi_bs) * self.viterbi_bs - n_seq
+        X = torch.nn.functional.pad(X.T, (0, batch_padding_len)).T
+
+        n_seq_padded = X.shape[0]
+        X = X.reshape(n_seq_padded // self.viterbi_bs, self.viterbi_bs, T).contiguous()
+
+        Qidxs = torch.zeros(
+            n_seq_padded // self.viterbi_bs, self.viterbi_bs, T // self.V, dtype=self.idx_dtype, device=X.device
+        )
+        for i in range(len(X)):
+            Qidxs[i] = self.viterbi_tail_bite(training_lut, X[i])
+        Qidxs = Qidxs.reshape(n_seq_padded, T // self.V)[:n_seq]
+        return Qidxs
+
+
+    def quantize(self, X, fast_tail_bite=False, return_reco=False, **kwargs):
         training_lut = self.codebook.get_training_lut().to(X.device)
         if self.use_kernel:
             m, n = X.shape
@@ -335,23 +420,26 @@ class TrellisQuantizer(nn.Module):
         else:
             X = X.reshape(-1, self.T)
 
-        # Fisrt fase
-        roll_X = torch.roll(X, self.T // (2 * self.V) * self.V, 1)
-        state = self.quantize_seq(training_lut, roll_X, overlap=None)
-        overlap = state[:, self.T // (2 * self.V)] >> self.K * self.V
+        if fast_tail_bite:
+            state = self.quantize_seq_ftb(training_lut, X)
+        else:
+            # Fisrt fase
+            roll_X = torch.roll(X, self.T // 2, dims=1)
+            state = self.quantize_seq(training_lut, roll_X, overlap=None)
+            overlap = state[:, self.T // (2 * self.V)] >> self.K * self.V
+            # print("overlap", overlap)
+            # Second fase
+            state = self.quantize_seq(training_lut, X, overlap=overlap)
 
-        # Second fase
-        state = self.quantize_seq(training_lut, X, overlap=overlap)
-
-        # state = self.quantize_seq(training_lut, X)
 
         if return_reco:
-            return training_lut[state.int().to(training_lut.device)].to(state.device)
+            return training_lut[state.int().to(training_lut.device)].to(state.device).reshape(self.weight_shape)
 
         trellis = self.pack_states(state)
         if self.use_kernel:
             trellis = trellis_swizzling(trellis, m, n, self.K)
         return trellis
+
 
     def dequantize(self, trellis, **kwargs):
         training_lut = self.codebook.get_training_lut().to(trellis.device)
@@ -363,6 +451,7 @@ class TrellisQuantizer(nn.Module):
             states = self.unpack_states(trellis)
             w_reco = training_lut[states.int().to(training_lut.device)].to(states.device)
             return w_reco.reshape(self.weight_shape)
+
 
     def pack_states(self, states):
         B, T = states.shape
