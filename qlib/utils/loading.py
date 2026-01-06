@@ -73,7 +73,7 @@ class QATDataset(Dataset):
         return batch
 
     def get_dataloader(self):
-        return DataLoader(self, batch_size=self.batch_size)
+        return DataLoader(self, batch_size=self.batch_size, drop_last=True)
 
 
 class KnowledgeDistillationDataset(Dataset):
