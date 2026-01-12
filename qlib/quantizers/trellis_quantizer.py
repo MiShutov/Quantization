@@ -73,12 +73,33 @@ def int16_to_fp8_pair(x):
     return torch.stack([x2, x1], dim=-1).to(torch.uint8).view(torch.float8_e4m3fn).float()
 
 
+def int32_to_fp8_four(x):
+    # mask = 0b10011110
+    # x1 = x & mask
+    # # x2 = (x >> 8) & mask
+    # # x3 = (x >> 16) & mask
+    # # x4 = (x >> 24) & mask
+    # x2 = (x >> 6) & mask
+    # x3 = (x >> 12) & mask
+    # x4 = (x >> 18) & mask
+    # return torch.stack([x4, x3, x2, x1], dim=-1).to(torch.uint8).view(torch.float8_e4m3fn).float()
+
+    x1 = (x & 0b11111).to(torch.uint8)
+    x2 = ((x >> 5) & 0b11111).to(torch.uint8)
+    x3 = ((x >> 10) & 0b11111).to(torch.uint8)
+    x4 = ((x >> 15) & 0b11111).to(torch.uint8)
+
+    x = torch.stack([x4, x3, x2, x1], dim=-1)
+    x = ((x & 0b10000) << 3) + ((x & 0b01111) << 1)
+    
+    return x.view(torch.float8_e4m3fn).float()
+
+
+
 def int8_to_fp8(x):
     x = x.int() & 0xFF # check uint8
-
     mask = 0b10011110
     x = x & mask
-
     return x.to(torch.uint8).view(torch.float8_e4m3fn).float()
 
 
@@ -105,9 +126,9 @@ class CodebookLUTfreeFP8:
             training_lut = int16_to_fp8_pair(table)
 
         elif self.V == 4:
-            table1 = custom_permute_fast(torch.arange(1 << self.L))
-            table2 = custom_permute_fast(torch.arange(1 << self.L), a=8675309)
-            training_lut = torch.cat([int16_to_fp8_pair(table1),  int16_to_fp8_pair(table2)], dim=-1)
+            table = torch.arange(1 << self.L)
+            table = (table * 34038481) >> 7
+            training_lut = int32_to_fp8_four(table)
 
         return training_lut / training_lut.std()
 

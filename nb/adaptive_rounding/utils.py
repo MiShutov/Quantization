@@ -191,6 +191,53 @@ def optimize_quant_params_cholesky(
     print(f"{init_loss} -> {loss}")
 
 
+@torch.compile()
+def cholesky_loss_ste(layer_q, layer_fp, L, C=None):
+    latent_weight_reshaped = layer_q.reshape_weight_for_scaling(layer_q.latent_weight)
+    latent_weight_scaled = (latent_weight_reshaped + layer_q.offset[..., None]) / layer_q.scale[..., None]
+
+    quant_weight = torch.clamp(torch.round(latent_weight_scaled), 0, 2 ** layer_q.bits - 1)
+    layer_q.compressed_weight.copy_(quant_weight.reshape_as(layer_fp.weight).to(torch.uint8))
+
+    quant_weight_ste = quant_weight + latent_weight_scaled - latent_weight_scaled.detach()
+    weight_reco = quant_weight_ste * layer_q.scale[..., None] - layer_q.offset[..., None]
+    weight_reco = weight_reco.reshape_as(layer_fp.weight)
+    if C is not None:
+        weight_reco = weight_reco @ C.T
+
+    delta_w = weight_reco - layer_fp.weight
+    return torch.sum((delta_w @ L) ** 2)
+
+
+def optimize_quant_params_cholesky_ste(
+        layer_q,
+        layer_fp,
+        L,
+        C=None
+    ):
+    layer_q.latent_weight = nn.Parameter(layer_fp.weight.data.clone().float())
+    
+    s_optim = torch.optim.Adam([layer_q.scale], lr=0.0)
+    lw_optim = torch.optim.Adam([layer_q.latent_weight], lr=1e-5)
+    
+    n_steps = 100
+
+    for i in range(n_steps):
+        s_optim.zero_grad()
+        lw_optim.zero_grad()
+
+        loss = cholesky_loss_ste(layer_q, layer_fp, L, C)
+        if i == 0:
+            init_loss = loss.item()
+        loss.backward()
+        
+        s_optim.step()
+        lw_optim.step()
+        
+    print(f"{init_loss} -> {loss}")
+    del layer_q.latent_weight
+
+
 def hessian_loss_ste(layer_q, layer_fp, H):
     max_int_val = 2**layer_q.bits - 1
 
@@ -245,6 +292,7 @@ def init_quant_block_hessian(
         activations,
         causal_mask,
         position_embeddings,
+        use_cholesky=False
         ):
 
     ##### Attention #####
@@ -259,13 +307,18 @@ def init_quant_block_hessian(
 
     # Initialize q,k,v-projs
     H = prepare_hessian(activations)
+    L = torch.linalg.cholesky(H) if use_cholesky else None
     block_q_attn = block_q.self_attn
     block_fp_attn = block_fp.self_attn
     for layer_name in ["q_proj", "k_proj", "v_proj"]:
         layer_q = getattr(block_q_attn, layer_name)
         layer_fp = getattr(block_fp_attn, layer_name)
         configure_single_layer(layer_q, layer_fp)
-        optimize_quant_params(layer_q, layer_fp, H)
+        if use_cholesky:
+            optimize_quant_params_cholesky(layer_q, layer_fp, L)
+            #optimize_quant_params_cholesky_ste(layer_q, layer_fp, L)
+        else:
+            optimize_quant_params(layer_q, layer_fp, H)
 
     # Collect attention-out activations
     with torch.no_grad():
@@ -280,8 +333,13 @@ def init_quant_block_hessian(
     layer_q = block_q.self_attn.o_proj
     layer_fp = block_fp.self_attn.o_proj
     H = prepare_hessian(activations)
+    L = torch.linalg.cholesky(H) if use_cholesky else None
     configure_single_layer(layer_q, layer_fp)
-    optimize_quant_params(layer_q, layer_fp, H)
+    if use_cholesky:
+        optimize_quant_params_cholesky(layer_q, layer_fp, L)
+        # optimize_quant_params_cholesky_ste(layer_q, layer_fp, L)
+    else:
+        optimize_quant_params(layer_q, layer_fp, H)
 
     # Collect self_attn outs
     with torch.no_grad():
@@ -302,13 +360,18 @@ def init_quant_block_hessian(
 
     # Initialize gate_proj and up_proj
     H = prepare_hessian(activations)
+    L = torch.linalg.cholesky(H) if use_cholesky else None
     block_q_mlp = block_q.mlp
     block_fp_mlp = block_fp.mlp
     for layer_name in ["gate_proj", "up_proj"]:
         layer_q = getattr(block_q_mlp, layer_name)
         layer_fp = getattr(block_fp_mlp, layer_name)
         configure_single_layer(layer_q, layer_fp)
-        optimize_quant_params(layer_q, layer_fp, H)
+        if use_cholesky:
+            optimize_quant_params_cholesky(layer_q, layer_fp, L)
+            # optimize_quant_params_cholesky_ste(layer_q, layer_fp, L)
+        else:
+            optimize_quant_params(layer_q, layer_fp, H)
 
     # Collect internal mlp activations
     with torch.no_grad():
@@ -320,8 +383,13 @@ def init_quant_block_hessian(
     layer_q = block_q.mlp.down_proj
     layer_fp = block_fp.mlp.down_proj
     H = prepare_hessian(activations)
+    L = torch.linalg.cholesky(H) if use_cholesky else None
     configure_single_layer(layer_q, layer_fp)
-    optimize_quant_params(layer_q, layer_fp, H)
+    if use_cholesky:
+        optimize_quant_params_cholesky(layer_q, layer_fp, L)
+        # optimize_quant_params_cholesky_ste(layer_q, layer_fp, L)
+    else:
+        optimize_quant_params(layer_q, layer_fp, H)
 
     # Collect mlp outs
     with torch.no_grad():
@@ -525,6 +593,7 @@ def init_quant_model_hessian(model_q, model_fp, dataloader, advanced=False, init
                 activations,
                 causal_mask,
                 position_embeddings,
+                use_cholesky=use_cholesky
             )
         else:
             init_quant_block_hessian_advanced(
